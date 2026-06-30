@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# tg-access — manage the telegram plugin access.json from the host via `docker exec`.
+# This is an AUTHENTICATED admin channel (host shell), NOT a Telegram message — the
+# only sanctioned way to mutate access. Never wire access changes to chat input.
+# See SPEC.md §8. Mirrors the /telegram:access skill schema.
+set -euo pipefail
+
+STATE="${TELEGRAM_STATE_DIR:-/data/telegram}"
+F="$STATE/access.json"
+mkdir -p "$STATE/approved"
+[ -f "$F" ] || echo '{"dmPolicy":"pairing","allowFrom":[],"groups":{},"pending":{}}' > "$F"
+
+usage() {
+  cat <<EOF
+tg-access — manage Telegram bot access (host-side admin)
+  tg-access status
+  tg-access allow <userId>          add user to DM allowlist
+  tg-access remove <userId>         remove user from DM allowlist
+  tg-access policy <pairing|allowlist|disabled>
+  tg-access group add <groupId> [--allow id1,id2] [--no-mention]
+  tg-access group rm <groupId>
+  tg-access pair <code>             approve a pending pairing (manual)
+EOF
+}
+
+write() { local tmp; tmp="$(mktemp)"; jq "$@" "$F" > "$tmp" && mv "$tmp" "$F"; }
+
+cmd="${1:-status}"; shift || true
+case "$cmd" in
+  status)
+    jq -r '"dmPolicy: \(.dmPolicy)\nallowFrom (\(.allowFrom|length)): \(.allowFrom|join(", "))\ngroups (\(.groups|length)): \(.groups|keys|join(", "))\npending: \(.pending|length)"' "$F"
+    ;;
+  allow)   [ $# -ge 1 ] || { usage; exit 1; }; write --arg id "$1" '.allowFrom = (.allowFrom + [$id] | unique)'; echo "allowed $1" ;;
+  remove)  [ $# -ge 1 ] || { usage; exit 1; }; write --arg id "$1" '.allowFrom -= [$id]'; echo "removed $1" ;;
+  policy)  [ $# -ge 1 ] || { usage; exit 1; }
+           case "$1" in pairing|allowlist|disabled) write --arg p "$1" '.dmPolicy=$p'; echo "policy=$1";; *) echo "invalid policy"; exit 1;; esac ;;
+  pair)    [ $# -ge 1 ] || { usage; exit 1; }
+           code="$1"
+           sid="$(jq -r --arg c "$code" '.pending[$c].senderId // empty' "$F")"
+           cid="$(jq -r --arg c "$code" '.pending[$c].chatId   // empty' "$F")"
+           [ -n "$sid" ] || { echo "no pending code $code"; exit 1; }
+           write --arg id "$sid" --arg c "$code" '.allowFrom=(.allowFrom+[$id]|unique) | del(.pending[$c])'
+           printf '%s' "$cid" > "$STATE/approved/$sid"
+           echo "paired $sid" ;;
+  group)
+    sub="${1:-}"; shift || true
+    case "$sub" in
+      add)
+        [ $# -ge 1 ] || { usage; exit 1; }
+        gid="$1"; shift || true
+        mention=true; allow="[]"
+        while [ $# -gt 0 ]; do case "$1" in
+          --no-mention) mention=false ;;
+          --allow) shift; allow="$(printf '%s' "${1:-}" | jq -R 'split(",")|map(select(length>0))')" ;;
+        esac; shift || true; done
+        write --arg g "$gid" --argjson m "$mention" --argjson a "$allow" \
+          '.groups[$g] = {requireMention:$m, allowFrom:$a}'
+        echo "group add $gid (requireMention=$mention)" ;;
+      rm) [ $# -ge 1 ] || { usage; exit 1; }; write --arg g "$1" 'del(.groups[$g])'; echo "group rm $1" ;;
+      *) usage; exit 1 ;;
+    esac ;;
+  -h|--help|help) usage ;;
+  *) usage; exit 1 ;;
+esac

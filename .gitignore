@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+
+# internal architecture doc — not for public repo
+docs/LUONG-XU-LY.md
