@@ -34,13 +34,14 @@ docker exec mybot tg-access group add <group-id>
 
 ## Xem bot đang làm gì (monitor session)
 
-`claude --channels` là TUI chạy ở tiến trình chính của container. Hai cách theo dõi:
+`claude --channels` chạy trong một **tmux session tên `claude`**. Hai cách theo dõi:
 
-**1) Attach vào TUI live** — thấy trực tiếp phiên claude:
+**1) Attach vào tmux session** — thấy trực tiếp phiên claude live:
 ```bash
-docker attach mybot
+docker exec -it -u botuser mybot tmux attach -t claude
 ```
-> ⚠️ Thoát bằng **Ctrl+P rồi Ctrl+Q** (detach, bot vẫn chạy). ĐỪNG nhấn **Ctrl+C** — nó giết tiến trình claude = tắt bot. (`docker logs` không hiện đẹp vì TUI vẽ bằng mã điều khiển terminal.)
+> Thoát an toàn bằng **Ctrl+B rồi D** (detach — bot vẫn chạy bình thường, tmux không bị giết). Đây là lý do dùng tmux: an toàn hơn `docker attach` (vốn dễ lỡ Ctrl+C làm tắt bot).
+> Nhớ `-u botuser` (session thuộc user botuser).
 
 **2) Đọc transcript** — bản ghi từng phiên (JSONL: claude nghĩ gì, gọi tool nào):
 ```bash

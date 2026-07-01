@@ -92,8 +92,18 @@ fi
 PERMISSION_MODE="${PERMISSION_MODE:-}"
 
 cd "$WORK_DIR"
-echo "[entrypoint] starting claude --channels (telegram)… as $BOT_USER (cwd=$WORK_DIR, permission-mode=${PERMISSION_MODE:-default})"
+
+# Build the claude command as a single string for `tmux new-session`.
+CLAUDE_CMD="claude --channels plugin:telegram@claude-plugins-official"
+[ -n "$PERMISSION_MODE" ] && CLAUDE_CMD="$CLAUDE_CMD --permission-mode $PERMISSION_MODE"
+[ -n "${MODEL:-}" ] && CLAUDE_CMD="$CLAUDE_CMD --model $MODEL"
+
+echo "[entrypoint] starting claude --channels in tmux session 'claude' as $BOT_USER (cwd=$WORK_DIR, permission-mode=${PERMISSION_MODE:-default})"
+echo "[entrypoint] xem session:  docker exec -it -u $BOT_USER <container> tmux attach -t claude   (thoát an toàn: Ctrl+B rồi D)"
+
+# Run claude INSIDE a tmux session named 'claude' so it can be monitored live via
+# `tmux attach` (detach safely with Ctrl+B D — never kills the bot). tmux is PID 1's
+# foreground process (needs tty:true / -it). When claude exits the session ends →
+# tmux exits → container exits → restart policy restarts it.
 exec gosu "$BOT_USER" env HOME="$BOT_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" TELEGRAM_STATE_DIR="$TELEGRAM_STATE_DIR" WORK_DIR="$WORK_DIR" \
-  claude --channels plugin:telegram@claude-plugins-official \
-  ${PERMISSION_MODE:+--permission-mode "$PERMISSION_MODE"} \
-  ${MODEL:+--model "$MODEL"}
+  tmux new-session -s claude "$CLAUDE_CMD"

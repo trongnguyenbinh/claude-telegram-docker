@@ -11,7 +11,7 @@ FROM debian:bookworm-slim
 
 # --- system deps (gosu = privilege drop root -> botuser) ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git curl ca-certificates jq tini bash unzip gosu \
+      git curl ca-certificates jq tini bash unzip gosu tmux \
     && rm -rf /var/lib/apt/lists/*
 
 # --- non-root user ---
