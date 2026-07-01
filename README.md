@@ -27,10 +27,13 @@ docker exec -u botuser mybot claude auth status   # loggedIn:true
 Xong. Kiểm tra trạng thái / quản lý quyền truy cập:
 
 ```bash
-docker exec mybot claude auth status
-docker exec mybot tg-access status
-docker exec mybot tg-access group add <group-id>
+docker exec -u botuser mybot claude auth status
+docker exec -u botuser mybot tg-access status
+docker exec -u botuser mybot tg-access group add <group-id>
 ```
+> ⚠️ Chạy `tg-access` (và `claude ...`) với **`-u botuser`**. Bot chạy non-root
+> (botuser) và `access.json` thuộc botuser; chạy tg-access bằng root thì thay đổi
+> KHÔNG lưu được (bị server ghi đè) — group/allow add xong mà `status` vẫn trống.
 
 ## Xem bot đang làm gì (monitor session)
 
@@ -98,6 +101,10 @@ docker exec -u botuser claude-tg-bot claude auth status   # loggedIn:true
 - Đổi token thì phải restart container (token chỉ đọc một lần lúc boot).
 
 ## tg-access
+
+Quản trị quyền truy cập. **Luôn chạy với `-u botuser`** (xem cảnh báo ở trên):
+`docker exec -u botuser <bot> tg-access <lệnh>`. Thay đổi có hiệu lực NGAY (access.json
+đọc lại mỗi tin, không cần restart).
 
 ```
 tg-access status
