@@ -15,19 +15,13 @@ docker run -d --name mybot \
   --restart unless-stopped \
   ghcr.io/trongnguyenbinh/claude-telegram-docker:latest
 
-# Xác thực Claude một lần — tạo token (dùng gói subscription Claude của bạn):
-docker exec -it mybot claude setup-token
-#   → mở một URL, authorize, dán TOÀN BỘ mã; nó IN RA một token sống lâu.
-# Nhét token đó vào env của container rồi tạo lại (recreate):
-#   thêm  CLAUDE_CODE_OAUTH_TOKEN=<token>  vào cờ -e / file .env, rồi:
-docker rm -f mybot && docker run -d --name mybot \
-  -e TELEGRAM_BOT_TOKEN=<token> -e OWNER_ID=<id> \
-  -e CLAUDE_CODE_OAUTH_TOKEN=<token-vừa-setup-token-in-ra> \
-  -v botdata:/data --restart unless-stopped \
-  ghcr.io/trongnguyenbinh/claude-telegram-docker:latest
-#   (token qua env = xác thực headless, sống sót cả khi xoá volume. `claude auth
-#    login` hay bị lỗi 400 trong container — không có trình duyệt thật / lệch PKCE.)
-docker exec mybot claude auth status   # loggedIn:true
+# Xác thực Claude một lần — ĐĂNG NHẬP TƯƠNG TÁC, chạy AS botuser (user bot chạy):
+docker exec -it -u botuser mybot claude auth login
+#   → mở URL in ra, authorize, dán mã. Creds lưu vào /data/.claude (trên volume)
+#     → sống qua restart, KHÔNG cần recreate.
+#   ⚠️ PHẢI có -u botuser để creds thuộc botuser; thiếu nó login vào user root → bot đọc không ra.
+docker exec -u botuser mybot claude auth status   # loggedIn:true
+# (Tuỳ chọn thay thế: -e ANTHROPIC_API_KEY / -e CLAUDE_CODE_OAUTH_TOKEN vẫn dùng được.)
 ```
 
 Xong. Kiểm tra trạng thái / quản lý quyền truy cập:
@@ -38,6 +32,22 @@ docker exec mybot tg-access status
 docker exec mybot tg-access group add <group-id>
 ```
 
+## Xem bot đang làm gì (monitor session)
+
+`claude --channels` là TUI chạy ở tiến trình chính của container. Hai cách theo dõi:
+
+**1) Attach vào TUI live** — thấy trực tiếp phiên claude:
+```bash
+docker attach mybot
+```
+> ⚠️ Thoát bằng **Ctrl+P rồi Ctrl+Q** (detach, bot vẫn chạy). ĐỪNG nhấn **Ctrl+C** — nó giết tiến trình claude = tắt bot. (`docker logs` không hiện đẹp vì TUI vẽ bằng mã điều khiển terminal.)
+
+**2) Đọc transcript** — bản ghi từng phiên (JSONL: claude nghĩ gì, gọi tool nào):
+```bash
+docker exec mybot sh -c 'ls -t /data/.claude/projects/*/*.jsonl | head'
+docker exec mybot sh -c 'tail -f /data/.claude/projects/*/*.jsonl'
+```
+
 Image được GitHub Actions publish lên GHCR mỗi lần push vào `main` và mỗi tag `v*`
 (`.github/workflows/docker-publish.yml`, linux/amd64 + arm64).
 
@@ -46,20 +56,20 @@ Image được GitHub Actions publish lên GHCR mỗi lần push vào `main` và
 ```bash
 cp .env.example .env      # điền TELEGRAM_BOT_TOKEN + OWNER_ID
 docker compose up -d --build
-# xác thực một lần — IN RA token (KHÔNG tự lưu):
-docker exec -it claude-tg-bot claude setup-token
-#   → mở URL, authorize, dán TOÀN BỘ mã; nó in ra token sống lâu.
-# Nhét token vào .env, rồi RECREATE (không phải `restart` — restart không nạp lại env):
-#   thêm  CLAUDE_CODE_OAUTH_TOKEN=<token-vừa-in>  vào .env, rồi:
-docker compose up -d
-docker exec claude-tg-bot claude auth status   # loggedIn:true
+# xác thực một lần — đăng nhập tương tác AS botuser (creds lưu trên volume):
+docker exec -it -u botuser claude-tg-bot claude auth login
+docker exec -u botuser claude-tg-bot claude auth status   # loggedIn:true
 ```
 
-> Lưu ý: `setup-token` chỉ *in ra* một token headless (`Use this token by setting:
-> export CLAUDE_CODE_OAUTH_TOKEN=...`). Nó **không** ghi credentials vào volume, nên
-> `docker compose restart` không đủ — vẫn `loggedIn:false`. Phải nhét token vào
-> `.env` (`CLAUDE_CODE_OAUTH_TOKEN`) và **tạo lại** container (`docker compose up -d`)
-> để env được đọc lại.
+> **Chạy non-root (Auto Mode):** container chạy bằng user `botuser` (không phải root)
+> nên `PERMISSION_MODE=bypassPermissions` (Auto Mode — tự chạy tool không hỏi) hoạt
+> động — Claude chặn `--dangerously-skip-permissions` khi chạy root. entrypoint khởi
+> động bằng root chỉ để `chown` volume rồi hạ quyền xuống botuser (gosu) trước khi
+> chạy `claude --channels`.
+>
+> **Đăng nhập** dùng `claude auth login` (tương tác), creds lưu vào `/data/.claude`
+> trên volume → sống qua restart, login một lần. Nhớ `-u botuser` để creds thuộc đúng
+> user bot chạy.
 
 ## Cách hoạt động
 
