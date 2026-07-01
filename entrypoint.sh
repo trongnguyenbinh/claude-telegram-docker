@@ -27,6 +27,20 @@ if [ ! -d "$CLAUDE_CONFIG_DIR/plugins" ] && [ -d "$CLAUDE_STAGE/plugins" ]; then
   cp -a "$CLAUDE_STAGE/." "$CLAUDE_CONFIG_DIR/"
 fi
 
+# 1b) Normalize plugin install paths -> the runtime config dir. The baked config
+#     records marketplace/plugin locations at the STAGING dir ($CLAUDE_STAGE, or
+#     /opt/claude-stage on legacy volumes from the old root image); the files
+#     actually live under $CLAUDE_CONFIG_DIR/plugins, so a stale absolute path →
+#     "Failed to load marketplace: cache-miss". Rewrite every boot (idempotent;
+#     self-heals volumes carried across image changes).
+for _pf in known_marketplaces.json installed_plugins.json; do
+  _pfile="$CLAUDE_CONFIG_DIR/plugins/$_pf"
+  [ -f "$_pfile" ] && sed -i \
+    -e "s#/opt/claude-stage#$CLAUDE_CONFIG_DIR#g" \
+    -e "s#${CLAUDE_STAGE}#$CLAUDE_CONFIG_DIR#g" \
+    "$_pfile" || true
+done
+
 # 2) Seed the telegram plugin token file (gitignored secret) — first run only.
 if [ ! -f "$TELEGRAM_STATE_DIR/.env" ]; then
   umask 077
