@@ -51,8 +51,13 @@ RUN mkdir -p "$CLAUDE_STAGE" \
 # --- rtk (Rust token-killer): CLI binary + Claude Code hook (rewrites bash → rtk, saves tokens) ---
 # Not a plugin — a standalone binary that hooks into Claude Code. Install binary for botuser,
 # then seed its hook into the staged config so the bot picks it up.
-RUN curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh \
- && CLAUDE_CONFIG_DIR="$CLAUDE_STAGE" rtk init -g || echo "[build] rtk init non-fatal; will verify"
+RUN curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
+# Wire rtk's PreToolUse/Bash rewrite hook into the staged config (rtk init -g doesn't
+# persist to CLAUDE_STAGE); seeds to the bot's /data/.claude/settings.json on first run.
+RUN cfg="$CLAUDE_STAGE/settings.json"; tmp="$(mktemp)"; \
+    jq '.hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{"matcher":"Bash","hooks":[{"type":"command","command":"rtk hook claude"}]}])' "$cfg" > "$tmp" \
+ && mv "$tmp" "$cfg" \
+ && grep -q "rtk hook claude" "$cfg"
 
 # Bake "onboarding complete" so fresh volumes never hit the first-run wizard
 # (theme picker), which would hang a detached `claude --channels`.
