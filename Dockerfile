@@ -33,15 +33,26 @@ ENV PATH="/home/botuser/.local/bin:/home/botuser/.bun/bin:${PATH}"
 RUN curl -fsSL https://claude.ai/install.sh | bash
 RUN claude --version
 
-# --- Bake the Telegram plugin into a staging config dir (owned by botuser) ---
+# --- Bake plugins into a staging config dir (owned by botuser) ---
 # `owner/repo` clones via SSH (no key in build) → add by HTTPS URL + force github SSH→HTTPS.
 RUN git config --global url."https://github.com/".insteadOf "git@github.com:" \
  && git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 ENV CLAUDE_STAGE=/home/botuser/claude-stage
+# Marketplaces: claude-plugins-official (telegram/frontend-design/superpowers) + caveman.
 RUN mkdir -p "$CLAUDE_STAGE" \
  && CLAUDE_CONFIG_DIR="$CLAUDE_STAGE" claude plugin marketplace add https://github.com/anthropics/claude-plugins-official.git \
+ && CLAUDE_CONFIG_DIR="$CLAUDE_STAGE" claude plugin marketplace add https://github.com/JuliusBrussee/caveman.git \
  && CLAUDE_CONFIG_DIR="$CLAUDE_STAGE" claude plugin install telegram@claude-plugins-official \
+ && CLAUDE_CONFIG_DIR="$CLAUDE_STAGE" claude plugin install frontend-design@claude-plugins-official \
+ && CLAUDE_CONFIG_DIR="$CLAUDE_STAGE" claude plugin install superpowers@claude-plugins-official \
+ && CLAUDE_CONFIG_DIR="$CLAUDE_STAGE" claude plugin install caveman@caveman \
  && test -d "$CLAUDE_STAGE/plugins" && test -f "$CLAUDE_STAGE/settings.json"
+
+# --- rtk (Rust token-killer): CLI binary + Claude Code hook (rewrites bash → rtk, saves tokens) ---
+# Not a plugin — a standalone binary that hooks into Claude Code. Install binary for botuser,
+# then seed its hook into the staged config so the bot picks it up.
+RUN curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh \
+ && CLAUDE_CONFIG_DIR="$CLAUDE_STAGE" rtk init -g || echo "[build] rtk init non-fatal; will verify"
 
 # Bake "onboarding complete" so fresh volumes never hit the first-run wizard
 # (theme picker), which would hang a detached `claude --channels`.
