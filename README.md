@@ -65,11 +65,14 @@ docker exec -it -u botuser claude-tg-bot claude auth login
 docker exec -u botuser claude-tg-bot claude auth status   # loggedIn:true
 ```
 
-> **Chạy non-root (Auto Mode):** container chạy bằng user `botuser` (không phải root)
-> nên `PERMISSION_MODE=bypassPermissions` (Auto Mode — tự chạy tool không hỏi) hoạt
-> động — Claude chặn `--dangerously-skip-permissions` khi chạy root. entrypoint khởi
-> động bằng root chỉ để `chown` volume rồi hạ quyền xuống botuser (gosu) trước khi
-> chạy `claude --channels`.
+> **Permission mode:** mặc định `acceptEdits` — chạy headless không hộp thoại, hợp bot.
+> Container chạy non-root (`botuser`): entrypoint khởi động bằng root chỉ để `chown`
+> volume rồi hạ quyền xuống botuser (gosu) trước khi chạy `claude --channels`.
+>
+> ⚠️ **bypassPermissions** (tự chạy MỌI tool không hỏi) KHÔNG chạy được headless: Claude
+> Code 2.1.126+ bắt xác nhận hộp thoại "Yes, I accept" mỗi lần start, không có cách skip
+> tự động → bot sẽ TREO. Nếu cần, phải bấm tay: `docker exec -it -u botuser <bot> tmux
+> attach -t claude` → ↓ chọn "Yes, I accept" → Enter → Ctrl+B D (và lặp lại khi volume mới).
 >
 > **Đăng nhập** dùng `claude auth login` (tương tác), creds lưu vào `/data/.claude`
 > trên volume → sống qua restart, login một lần. Nhớ `-u botuser` để creds thuộc đúng
