@@ -70,8 +70,11 @@ RUN if [ -s "$CLAUDE_STAGE/.claude.json" ]; then \
 
 # --- back to root for scripts + entrypoint (entrypoint drops to botuser itself) ---
 USER root
-# bun on the global PATH too (harmless; botuser already has it on PATH)
-RUN ln -sf /home/botuser/.bun/bin/bun /usr/local/bin/bun
+# bun on the global PATH too (harmless; botuser already has it on PATH).
+# node -> bun: the caveman plugin's hooks run `node <script>`; base has no node,
+# so alias node to bun (bun runs node-style hook scripts) → caveman hooks work.
+RUN ln -sf /home/botuser/.bun/bin/bun /usr/local/bin/bun \
+ && ln -sf /home/botuser/.bun/bin/bun /usr/local/bin/node
 
 COPY scripts/tg-access /usr/local/bin/tg-access
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
