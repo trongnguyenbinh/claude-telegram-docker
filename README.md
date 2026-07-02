@@ -3,7 +3,7 @@
 **🇻🇳 Tiếng Việt** · [🇬🇧 English](./README.en.md)
 
 Chạy một con bot Telegram do Claude Code vận hành, gói gọn trong một container duy nhất. **1 image = 1 bot.**
-Thiết kế chi tiết: [`SPEC.md`](./SPEC.md).
+Thiết kế chi tiết: [`SPEC.md`](./SPEC.md). Bảng lệnh vận hành nhanh: [`CHEATSHEET.md`](./CHEATSHEET.md).
 
 ## Bắt đầu nhanh (dùng image đã publish — khỏi build, khỏi clone)
 
