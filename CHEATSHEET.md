@@ -37,7 +37,7 @@ Thay `<bot>` = tên container (vd `claude-tg-bot-qc`). **Hầu hết lệnh cầ
 | Việc | Lệnh / Ghi chú |
 |---|---|
 | Đổi trong TUI | nhấn **Shift+Tab** (xoay: accept edits → plan → bypass...) |
-| Set qua env | `-e PERMISSION_MODE=acceptEdits` (khuyên, headless không hộp thoại) |
+| Set qua env | mặc định `auto` (classifier-gated, khuyên dùng — headless không treo). Override: `-e PERMISSION_MODE=acceptEdits` |
 | bypassPermissions | bắt xác nhận hộp thoại "Yes, I accept" mỗi lần → headless TREO; attach tmux → ↓ chọn Yes → Enter |
 
 ## Quản trị truy cập (LUÔN `-u botuser`)

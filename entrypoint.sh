@@ -101,9 +101,13 @@ if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; the
 fi
 
 # 6) Permission policy. Configurable via PERMISSION_MODE env
-#    (default|acceptEdits|bypassPermissions|plan). bypassPermissions (Auto Mode)
-#    works now because claude runs NON-ROOT (below) + the accept flag is baked (3b).
-PERMISSION_MODE="${PERMISSION_MODE:-}"
+#    (auto|default|acceptEdits|bypassPermissions|manual|plan). Defaults to `auto`:
+#    Claude Code's classifier-gated Auto Mode — it auto-approves routine actions so
+#    the bot runs unattended without hanging on prompts, while still BLOCKING risky/
+#    production actions. (This is safer than bypassPermissions, which approves
+#    everything with no checks.) Override with e.g. PERMISSION_MODE=acceptEdits.
+#    Works because claude runs NON-ROOT (below) + the accept flag is baked (3b).
+PERMISSION_MODE="${PERMISSION_MODE:-auto}"
 
 cd "$WORK_DIR"
 
@@ -112,7 +116,7 @@ CLAUDE_CMD="claude --channels plugin:telegram@claude-plugins-official"
 [ -n "$PERMISSION_MODE" ] && CLAUDE_CMD="$CLAUDE_CMD --permission-mode $PERMISSION_MODE"
 [ -n "${MODEL:-}" ] && CLAUDE_CMD="$CLAUDE_CMD --model $MODEL"
 
-echo "[entrypoint] starting claude --channels in tmux session 'claude' as $BOT_USER (cwd=$WORK_DIR, permission-mode=${PERMISSION_MODE:-default})"
+echo "[entrypoint] starting claude --channels in tmux session 'claude' as $BOT_USER (cwd=$WORK_DIR, permission-mode=${PERMISSION_MODE})"
 echo "[entrypoint] xem session:  docker exec -it -u $BOT_USER <container> tmux attach -t claude   (thoát an toàn: Ctrl+B rồi D)"
 
 # Run claude INSIDE a tmux session named 'claude' so it can be monitored live via

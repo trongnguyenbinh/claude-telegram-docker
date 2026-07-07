@@ -92,7 +92,7 @@ docker exec -u botuser claude-tg-bot claude auth status   # loggedIn:true
 | `TELEGRAM_BOT_TOKEN` | ✅ | lấy từ @BotFather |
 | `OWNER_ID` | ✅ | Telegram user_id của bạn (1 owner duy nhất) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | khuyến nghị | xác thực headless — tạo một lần bằng `claude setup-token`, dán vào đây. Sống sót khi xoá volume. |
-| `PERMISSION_MODE` | tuỳ chọn | `default`/`acceptEdits`/`bypassPermissions`/`plan`. Bỏ trống = mặc định của claude. Đặt `bypassPermissions` cho bot tự chạy tool không hỏi (chủ động opt-in). |
+| `PERMISSION_MODE` | tuỳ chọn | `auto`/`default`/`acceptEdits`/`bypassPermissions`/`manual`/`plan`. **Bỏ trống = `auto`** — Auto Mode có classifier: tự duyệt hành động an toàn, chặn hành động rủi ro/production → bot chạy nền không treo mà vẫn an toàn. Override khi cần, vd `acceptEdits`. |
 | `WORK_DIR` | tuỳ chọn | thư mục claude của bot chạy trong đó (file ops rơi vào đây, đã pre-trust). Mặc định `/working-directory/claude-telegram-bot`; lưu trên volume `botwork`. |
 | `ANTHROPIC_API_KEY` | dự phòng | trả tiền theo token thay vì dùng subscription |
 | `MODEL` / `TZ` | tuỳ chọn | |
