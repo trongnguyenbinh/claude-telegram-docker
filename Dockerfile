@@ -9,10 +9,18 @@
 # via gosu before exec'ing `claude --channels`.
 FROM debian:bookworm-slim
 
-# --- system deps (gosu = privilege drop root -> botuser) ---
+# --- system deps (gosu = privilege drop root -> botuser; cron = scheduled reminders) ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git curl ca-certificates jq tini bash unzip gosu tmux openssh-client \
+      git curl ca-certificates jq tini bash unzip gosu tmux openssh-client cron \
     && rm -rf /var/lib/apt/lists/*
+
+# --- gh CLI (GitHub: clone/pull/push, gh run list / GH Actions) via GitHub's apt repo ---
+RUN mkdir -p /etc/apt/keyrings \
+ && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update && apt-get install -y --no-install-recommends gh \
+ && rm -rf /var/lib/apt/lists/*
 
 # --- non-root user ---
 RUN useradd -m -u 1000 -s /bin/bash botuser
