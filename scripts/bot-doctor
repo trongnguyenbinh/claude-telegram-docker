@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# bot-doctor — chẩn đoán sức khoẻ một bot claude-telegram-docker.
+# Dùng:  docker exec <container> bot-doctor
+# Chạy được cả khi exec bằng root hay botuser (tự gosu sang BOT_USER để xem tmux).
+set -u
+BOT_USER="${BOT_USER:-botuser}"
+CFG="${CLAUDE_CONFIG_DIR:-/data/.claude}"
+STATE="${TELEGRAM_STATE_DIR:-/data/telegram}"
+WORK="${WORK_DIR:-/working-directory/claude-telegram-bot}"
+
+g() { if [ "$(id -u)" = "0" ] && command -v gosu >/dev/null 2>&1; then gosu "$BOT_USER" "$@"; else "$@"; fi; }
+ok()   { printf '  \033[32m[OK]\033[0m   %s\n' "$1"; }
+bad()  { printf '  \033[31m[FAIL]\033[0m %s\n         -> %s\n' "$1" "$2"; FAILS=$((FAILS+1)); }
+warn() { printf '  \033[33m[WARN]\033[0m %s\n         -> %s\n' "$1" "$2"; }
+FAILS=0
+
+echo "==================== bot-doctor ===================="
+
+# 1) tmux session sống?
+if g tmux has-session -t claude 2>/dev/null; then
+  ok "tmux session 'claude' đang chạy (user=$BOT_USER)"
+else
+  bad "KHÔNG thấy tmux session 'claude' (bot có thể đã chết)" "docker restart <container>"
+fi
+
+# 2) permission mode
+mode=$(g tmux capture-pane -pt claude 2>/dev/null | grep -oiE "auto mode on|accept edits on|plan mode|bypass permissions" | head -1)
+if [ -n "$mode" ]; then
+  case "$mode" in
+    *auto*) ok "permission: auto mode on (không hỏi vặt)";;
+    *) warn "permission: $mode (không phải auto → hay bắt accept)" "recreate với -e PERMISSION_MODE=auto";;
+  esac
+else
+  warn "không đọc được permission mode từ session" "env PERMISSION_MODE=${PERMISSION_MODE:-chưa set}; nên =auto"
+fi
+
+# 3) poller: pending drain?
+TOK=$(sed -n 's/^TELEGRAM_BOT_TOKEN=//p' "$STATE/.env" 2>/dev/null | head -1 | tr -d '"'"'"'"'"'"' ')
+if [ -n "$TOK" ]; then
+  P=$(curl -fsS "https://api.telegram.org/bot$TOK/getWebhookInfo" 2>/dev/null | sed -n 's/.*"pending_update_count":\([0-9]*\).*/\1/p')
+  if [ -z "$P" ]; then
+    warn "không lấy được pending (mạng/token?)" "kiểm tra kết nối + token"
+  elif [ "$P" -gt 0 ] 2>/dev/null; then
+    sleep 6
+    P2=$(curl -fsS "https://api.telegram.org/bot$TOK/getWebhookInfo" 2>/dev/null | sed -n 's/.*"pending_update_count":\([0-9]*\).*/\1/p')
+    if [ "${P2:-1}" -ge "$P" ] 2>/dev/null; then
+      bad "poller KẸT: pending=$P không drain (bot không nhận tin mới)" "docker restart <container> (1 phát là thông)"
+    else
+      ok "poller: pending đang drain ($P -> $P2)"
+    fi
+  else
+    ok "poller: pending=0 (đang consume tin tốt)"
+  fi
+else
+  bad "không đọc được token ở $STATE/.env" "kiểm tra volume /data/telegram/.env"
+fi
+
+# 4) locale UTF-8 (tiếng Việt)
+case "${LANG:-}" in
+  *UTF-8*|*utf8*) ok "locale UTF-8 ($LANG) — tiếng Việt render đúng";;
+  *) warn "locale=${LANG:-chưa set} (không UTF-8) → tiếng Việt có thể vỡ trong session" "recreate từ image mới (đặt LANG=C.UTF-8)";;
+esac
+
+# 5) base CLAUDE.md + .workspace
+[ -f "$CFG/CLAUDE.md" ] && ok "base CLAUDE.md có ($CFG/CLAUDE.md)" || warn "thiếu base CLAUDE.md" "recreate/pull image mới để seed"
+if [ -d "$WORK/.workspace" ]; then
+  ok ".workspace/ có ($(ls "$WORK/.workspace" 2>/dev/null | tr '\n' ' '))"
+else
+  warn "thiếu .workspace/" "recreate/pull image mới để tạo skeleton"
+fi
+
+# 6) login claude
+if g env HOME="${BOT_HOME:-/home/botuser}" claude auth status >/dev/null 2>&1; then
+  ok "claude đã đăng nhập"
+else
+  [ -n "${ANTHROPIC_API_KEY:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && ok "claude auth qua env (API key/OAuth token)" || bad "claude CHƯA đăng nhập" "docker exec -it -u $BOT_USER <container> claude auth login"
+fi
+
+echo "===================================================="
+if [ "$FAILS" -eq 0 ]; then echo "Kết quả: OK, không lỗi nghiêm trọng."; else echo "Kết quả: $FAILS lỗi cần xử lý (xem [FAIL] ở trên)."; fi
+exit 0

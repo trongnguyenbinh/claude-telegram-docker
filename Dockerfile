@@ -103,7 +103,15 @@ COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 # to $CLAUDE_CONFIG_DIR/CLAUDE.md (user-level memory) so every bot loads it; a bot's
 # own work-dir CLAUDE.md layers on top.
 COPY scripts/default-CLAUDE.md /usr/local/share/claude-telegram/CLAUDE.md
-RUN chmod +x /usr/local/bin/tg-access /usr/local/bin/entrypoint.sh
+# Ops tooling: bot-doctor (on-demand diagnosis) + tg-healthcheck (Docker HEALTHCHECK liveness).
+COPY scripts/bot-doctor /usr/local/bin/bot-doctor
+COPY scripts/tg-healthcheck /usr/local/bin/tg-healthcheck
+RUN chmod +x /usr/local/bin/tg-access /usr/local/bin/entrypoint.sh /usr/local/bin/bot-doctor /usr/local/bin/tg-healthcheck
+
+# Liveness check: mark the container unhealthy if the tmux 'claude' session dies.
+# (Poller stalls leave the session alive — use `docker exec <c> bot-doctor` for those.)
+HEALTHCHECK --interval=60s --timeout=10s --start-period=90s --retries=3 \
+  CMD /usr/local/bin/tg-healthcheck
 
 # --- runtime config: config + state live on the volume so login + access persist ---
 ENV CLAUDE_CONFIG_DIR=/data/.claude \

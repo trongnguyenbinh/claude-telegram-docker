@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# tg-healthcheck — Docker HEALTHCHECK cho bot claude-telegram-docker.
+# Kiểm tra LIVENESS: tmux session 'claude' còn sống không (bắt được crash/exit).
+# exit 0 = healthy, 1 = unhealthy. Cố ý KHÔNG gọi Telegram API mỗi vòng (tránh
+# rate-limit + false-negative do mạng chập chờn) — poller-stall thì dùng `bot-doctor`.
+BOT_USER="${BOT_USER:-botuser}"
+if [ "$(id -u)" = "0" ] && command -v gosu >/dev/null 2>&1; then
+  gosu "$BOT_USER" tmux has-session -t claude 2>/dev/null && exit 0
+else
+  tmux has-session -t claude 2>/dev/null && exit 0
+fi
+exit 1
