@@ -38,6 +38,7 @@ Quy trình:
 - **Poller kẹt sau recreate** — container Up, session sống, auto mode on, NHƯNG
   `pending_update_count` > 0 và không drain (1 tin kẹt trong ô nhập chặn poll tiếp) → bot như chết.
   **Fix:** `docker restart <container>` (1 phát là thông). `bot-doctor` phát hiện được ca này.
+  **Tự lành (v1.3.1+):** `tg-watchdog` chạy qua cron mỗi phút — nếu pending kẹt 2 nhịp liền + session đang rảnh, nó tự `tmux send-keys Enter` submit tin kẹt → poller thông lại, thường khỏi cần restart tay. Log: `/tmp/tg-watchdog.log` trong container.
 - **Bắt accept liên tục** — bot chạy `PERMISSION_MODE=acceptEdits` (chỉ auto file-edit, VẪN hỏi
   mọi lệnh Bash/network). Muốn không hỏi vặt → `PERMISSION_MODE=auto`. Toggle shift+tab trong
   session KHÔNG bền qua restart; phải set ở env → recreate.

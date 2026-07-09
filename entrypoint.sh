@@ -124,11 +124,13 @@ fi
 #    Works because claude runs NON-ROOT (below) + the accept flag is baked (3b).
 PERMISSION_MODE="${PERMISSION_MODE:-auto}"
 
-# 6b) Start the cron daemon (as root, before the privilege drop) so a bot can
-#     schedule reminders via crontab. Harmless if unused. `cron` is baked in.
+# 6b) Start the cron daemon (as root, before the privilege drop). It runs both
+#     bot-scheduled reminders AND the tg-watchdog poller self-heal. Write the
+#     watchdog's runtime env so the cron job knows BOT_USER + the state dir.
+printf 'BOT_USER=%s\nTELEGRAM_STATE_DIR=%s\n' "$BOT_USER" "$TELEGRAM_STATE_DIR" > /etc/default/tg-watchdog 2>/dev/null || true
 if command -v cron >/dev/null 2>&1; then
   cron 2>/dev/null || service cron start 2>/dev/null || true
-  echo "[entrypoint] cron daemon started (scheduled reminders available)"
+  echo "[entrypoint] cron daemon started (reminders + poller watchdog)"
 fi
 
 cd "$WORK_DIR"

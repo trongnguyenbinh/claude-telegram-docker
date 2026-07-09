@@ -106,7 +106,10 @@ COPY scripts/default-CLAUDE.md /usr/local/share/claude-telegram/CLAUDE.md
 # Ops tooling: bot-doctor (on-demand diagnosis) + tg-healthcheck (Docker HEALTHCHECK liveness).
 COPY scripts/bot-doctor /usr/local/bin/bot-doctor
 COPY scripts/tg-healthcheck /usr/local/bin/tg-healthcheck
-RUN chmod +x /usr/local/bin/tg-access /usr/local/bin/entrypoint.sh /usr/local/bin/bot-doctor /usr/local/bin/tg-healthcheck
+COPY scripts/tg-watchdog /usr/local/bin/tg-watchdog
+RUN chmod +x /usr/local/bin/tg-access /usr/local/bin/entrypoint.sh /usr/local/bin/bot-doctor /usr/local/bin/tg-healthcheck /usr/local/bin/tg-watchdog \
+ && printf '* * * * * root /usr/local/bin/tg-watchdog >> /tmp/tg-watchdog.log 2>&1\n' > /etc/cron.d/tg-watchdog \
+ && chmod 0644 /etc/cron.d/tg-watchdog
 
 # Liveness check: mark the container unhealthy if the tmux 'claude' session dies.
 # (Poller stalls leave the session alive — use `docker exec <c> bot-doctor` for those.)
