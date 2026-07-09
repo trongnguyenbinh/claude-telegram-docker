@@ -1,0 +1,29 @@
+# claude-telegram-docker + Playwright — variant for bots that RENDER UI and take
+# SCREENSHOTS (headless Chromium). Heavier (~+1GB) so the base image stays lean;
+# only bots that need a browser use this tag (ghcr.io/<owner>/…:playwright).
+ARG BASE=ghcr.io/trongnguyenbinh/claude-telegram-docker:latest
+FROM ${BASE}
+
+USER root
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# Real Node.js — the base image only has bun (+ a node->bun shim for caveman hooks);
+# @playwright/mcp + playwright need REAL node. Drop the shim so real node wins on PATH.
+RUN rm -f /usr/local/bin/node \
+ && apt-get update && apt-get install -y --no-install-recommends curl gnupg ca-certificates \
+ && mkdir -p /etc/apt/keyrings \
+ && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+ && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+ && apt-get update && apt-get install -y --no-install-recommends nodejs \
+ && rm -rf /var/lib/apt/lists/*
+
+# Playwright + Chromium + OS deps, into a world-readable global browser path
+# (the bot runs as non-root botuser, so the browser binaries must be readable by it).
+RUN npm install -g playwright @playwright/mcp \
+ && npx playwright install --with-deps chromium \
+ && chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH"
+
+# caveman hooks (`node <script>`) now run on real node (fine). bun stays at
+# /usr/local/bin/bun for the telegram plugin. ENTRYPOINT inherited from the base.
+# Add the Playwright MCP to a bot: docker exec -u botuser <bot> \
+#   claude mcp add --scope user playwright -- npx @playwright/mcp@latest --headless
