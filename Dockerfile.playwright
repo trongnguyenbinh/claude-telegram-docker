@@ -25,5 +25,7 @@ RUN npm install -g playwright @playwright/mcp \
 
 # caveman hooks (`node <script>`) now run on real node (fine). bun stays at
 # /usr/local/bin/bun for the telegram plugin. ENTRYPOINT inherited from the base.
-# Add the Playwright MCP to a bot: docker exec -u botuser <bot> \
-#   claude mcp add --scope user playwright -- npx @playwright/mcp@latest --headless
+# Add the Playwright MCP to a bot — use the BAKED global bin `playwright-mcp`, NOT
+# `npx @playwright/mcp@latest` (npx re-downloads the package on every start, ignoring
+# the baked install → MCP "Failed to connect" + can stall the poller at boot):
+#   docker exec -u botuser <bot> claude mcp add --scope user playwright -- playwright-mcp --headless
