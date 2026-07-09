@@ -3,7 +3,19 @@
 [🇻🇳 Tiếng Việt](./README.md) · **🇬🇧 English**
 
 Run a Claude-Code-powered Telegram bot as a single container. **1 image = 1 bot.**
-Full design: [`SPEC.md`](./SPEC.md).
+Full design: [`SPEC.md`](./SPEC.md). Quick command table: [`CHEATSHEET.md`](./CHEATSHEET.md). Operations & troubleshooting: [`OPERATIONS.md`](./OPERATIONS.md).
+
+## Features (v1.2.0)
+
+- **Baked base rules** (`default-CLAUDE.md` → `/data/.claude/CLAUDE.md`, user-level memory; each bot's work-dir CLAUDE.md layers on top): owner-only authority, prompt-injection detection + owner alert, information isolation (never leak owner DM content, never carry context across groups/DMs), destructive-op confirmation, a polite reply tone that **overrides** caveman/terse mode for user-facing replies, and a reply self-check (did I actually call the reply tool?).
+- **Second-brain `.workspace/{rules,memory,events,status}`** skeleton created in the work dir on first run; conventions live in the base rules; syncs with mempalace.
+- **Baked `permissions`** in settings.json: deny reading secrets (`.env`/`secrets`/keys, cwd-anchored so the bot's own `/data` token is not blocked) + destructive circuit-breakers; allow routine read-only git + `gh`.
+- **`gh` CLI + `cron` baked in**: use `gh` for GitHub (auth via `-e GH_TOKEN=<PAT>` + `gh auth setup-git`; the github MCP plugin is broken — use gh); cron daemon started for scheduled reminders.
+- **Auto Mode by default** (`PERMISSION_MODE=auto`, classifier-gated) → the bot doesn't prompt yet still blocks risky actions. (`acceptEdits` still prompts on every Bash command.)
+- **UTF-8** (`LANG=C.UTF-8` + `tmux -u`) so Vietnamese renders correctly in the attached session.
+- **Run as root** (no image change): `-e BOT_USER=root -e BOT_HOME=/root`.
+- **Ops tooling**: `bot-doctor` (`docker exec <bot> bot-doctor` — checks tmux session / permission mode / poller pending-drain / locale / base CLAUDE.md / .workspace / login + prints the fix) and `tg-healthcheck` wired as a Docker HEALTHCHECK (marks the container `unhealthy` if the tmux `claude` session dies). Playbook + gotchas in [`OPERATIONS.md`](./OPERATIONS.md).
+- **`:playwright` variant** for bots that render UI + screenshot (see below).
 
 ## Quick start (from the published image — no build, no clone)
 
@@ -75,7 +87,7 @@ docker exec claude-tg-bot claude auth status   # loggedIn:true
 | `TELEGRAM_BOT_TOKEN` | ✅ | from @BotFather |
 | `OWNER_ID` | ✅ | your Telegram user_id (single owner) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | recommended | headless auth — generate once with `claude setup-token`, paste here. Survives volume wipes. |
-| `PERMISSION_MODE` | optional | `default`/`acceptEdits`/`bypassPermissions`/`plan`. Unset = claude default. Set `bypassPermissions` for an autonomous bot that runs tools without prompting (opt in deliberately). |
+| `PERMISSION_MODE` | optional | `auto`/`default`/`acceptEdits`/`bypassPermissions`/`manual`/`plan`. **Unset = `auto`** — classifier-gated Auto Mode: auto-approves safe actions, blocks risky/production ones → runs unattended without hanging, still safe. Override when needed, e.g. `acceptEdits` (which still prompts on every Bash command). |
 | `WORK_DIR` | optional | dir the bot's claude runs in (file ops land here, pre-trusted). Default `/working-directory/claude-telegram-bot`; persisted on the `botwork` volume. |
 | `ANTHROPIC_API_KEY` | fallback | pay-per-token instead of your subscription |
 | `MODEL` / `TZ` | optional | |
@@ -85,6 +97,10 @@ docker exec claude-tg-bot claude auth status   # loggedIn:true
 - `claude --channels` is an interactive TUI → the container needs a PTY (`tty: true` + `stdin_open: true`, already set in compose; use `-it` with `docker run`).
 - **One token = one container.** Telegram allows a single `getUpdates` poller per token; two containers on the same token → 409 conflict.
 - Changing the token requires a container restart (read once at boot).
+- **Poller stall after a recreate:** verify `pending_update_count` drains to 0 (use `bot-doctor`); if the poller stalls (a msg stuck in the input box) → `docker restart <bot>` clears it.
+- **The baked `permissions` block only seeds FRESH volumes** — existing bots need a manual merge into `/data/.claude/settings.json`, then restart.
+- **An extra docker network (e.g. `db-shared`) is NOT preserved by a plain recreate** → add `--network <net>` on the `docker run`.
+- Details + playbook: [`OPERATIONS.md`](./OPERATIONS.md).
 
 ## tg-access
 
@@ -96,6 +112,23 @@ tg-access group add <groupId> [--allow id1,id2] [--no-mention]
 tg-access group rm <groupId>
 tg-access pair <code>
 ```
+
+## `:playwright` variant (render UI + screenshot)
+
+For bots that need a browser (build UI, take screenshots). This variant = base image + real Node 20 + Chromium + Playwright (heavier by ~1GB, **amd64 only**). Built from `Dockerfile.playwright`, published as the `:playwright` tag.
+
+Give a bot Playwright:
+
+```bash
+# 1) Run / recreate the bot on the :playwright image (same volumes + env as usual)
+ghcr.io/trongnguyenbinh/claude-telegram-docker:playwright
+
+# 2) Wire the Playwright MCP using the BAKED binary (NOT npx — npx re-downloads the package on every start → connection failure)
+docker exec -u botuser <bot> claude mcp add --scope user playwright -- playwright-mcp --headless
+docker restart <bot>
+```
+
+> ⚠️ Use `playwright-mcp --headless` (the baked global binary), NOT `npx @playwright/mcp@latest` (re-downloads on every boot → MCP "Failed to connect" + can stall the poller).
 
 ## License
 

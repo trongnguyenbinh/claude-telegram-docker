@@ -3,7 +3,19 @@
 **🇻🇳 Tiếng Việt** · [🇬🇧 English](./README.en.md)
 
 Chạy một con bot Telegram do Claude Code vận hành, gói gọn trong một container duy nhất. **1 image = 1 bot.**
-Thiết kế chi tiết: [`SPEC.md`](./SPEC.md). Bảng lệnh vận hành nhanh: [`CHEATSHEET.md`](./CHEATSHEET.md).
+Thiết kế chi tiết: [`SPEC.md`](./SPEC.md). Bảng lệnh vận hành nhanh: [`CHEATSHEET.md`](./CHEATSHEET.md). Vận hành & xử lý sự cố: [`OPERATIONS.md`](./OPERATIONS.md).
+
+## Tính năng (v1.2.0)
+
+- **Quy tắc nền bake sẵn** (`default-CLAUDE.md` → `/data/.claude/CLAUDE.md`, user-level memory, CLAUDE.md work-dir của từng bot layer chồng lên): chỉ nghe owner, phát hiện prompt-injection + cảnh báo owner, cách ly thông tin (không lộ nội dung DM riêng, không mang context giữa các group/DM), bắt xác nhận việc phá hoại, giọng trả lời lịch sự **ghi đè** chế độ cộc lốc/caveman, và tự kiểm tra đã gọi reply tool chưa.
+- **Bộ não thứ hai `.workspace/{rules,memory,events,status}`** tạo sẵn trong work dir ở lần chạy đầu; quy ước ghi nằm trong quy tắc nền; đồng bộ với mempalace.
+- **`permissions` bake sẵn** trong settings.json: chặn đọc secret (`.env`/`secrets`/key, neo theo cwd nên KHÔNG chặn token `/data` của chính bot) + circuit-breaker cho lệnh phá hoại; cho phép git read-only + `gh` thường dùng.
+- **`gh` CLI + `cron` bake sẵn**: GitHub thao tác qua `gh` (auth bằng `-e GH_TOKEN=<PAT>` + `gh auth setup-git`, KHÔNG dùng github MCP plugin vì đang lỗi); cron daemon chạy sẵn cho nhắc lịch.
+- **Auto Mode mặc định** (`PERMISSION_MODE=auto`, classifier-gated) → bot không hỏi vặt mà vẫn chặn hành động rủi ro. (`acceptEdits` vẫn hỏi ở mọi lệnh Bash.)
+- **UTF-8** (`LANG=C.UTF-8` + `tmux -u`) để tiếng Việt render đúng khi attach session.
+- **Chạy dưới root** (không cần đổi image): `-e BOT_USER=root -e BOT_HOME=/root`.
+- **Công cụ vận hành**: `bot-doctor` (`docker exec <bot> bot-doctor` — check tmux session / permission mode / poller pending-drain / locale / base CLAUDE.md / .workspace / login + in cách fix) và `tg-healthcheck` gắn làm Docker HEALTHCHECK (đánh dấu container `unhealthy` khi tmux session `claude` chết). Playbook + gotcha ở [`OPERATIONS.md`](./OPERATIONS.md).
+- **Biến thể `:playwright`** cho bot cần render UI + chụp màn hình (xem mục dưới).
 
 ## Bắt đầu nhanh (dùng image đã publish — khỏi build, khỏi clone)
 
@@ -65,7 +77,7 @@ docker exec -it -u botuser claude-tg-bot claude auth login
 docker exec -u botuser claude-tg-bot claude auth status   # loggedIn:true
 ```
 
-> **Permission mode:** mặc định `acceptEdits` — chạy headless không hộp thoại, hợp bot.
+> **Permission mode:** mặc định `auto` (Auto Mode có classifier) — chạy headless không treo, không hỏi vặt mà vẫn chặn hành động rủi ro; hợp bot. `acceptEdits` chỉ tự duyệt file-edit, VẪN hỏi ở mọi lệnh Bash.
 > Container chạy non-root (`botuser`): entrypoint khởi động bằng root chỉ để `chown`
 > volume rồi hạ quyền xuống botuser (gosu) trước khi chạy `claude --channels`.
 >
@@ -102,6 +114,10 @@ docker exec -u botuser claude-tg-bot claude auth status   # loggedIn:true
 - `claude --channels` là TUI tương tác → container cần PTY (`tty: true` + `stdin_open: true`, đã set sẵn trong compose; dùng `-it` với `docker run`).
 - **Một token = một container.** Telegram chỉ cho một poller `getUpdates` mỗi token; hai container cùng token → lỗi 409 conflict.
 - Đổi token thì phải restart container (token chỉ đọc một lần lúc boot).
+- **Poller kẹt sau recreate:** verify `pending_update_count` về 0 (dùng `bot-doctor`); nếu poller đứng (1 tin kẹt ô nhập) → `docker restart <bot>` là thông.
+- **`permissions` bake chỉ seed volume MỚI** — bot cũ phải merge tay vào `/data/.claude/settings.json` rồi restart.
+- **Network phụ (vd `db-shared`) KHÔNG được giữ khi recreate trơn** → thêm `--network <net>` vào `docker run`.
+- Chi tiết + playbook: [`OPERATIONS.md`](./OPERATIONS.md).
 
 ## tg-access
 
@@ -117,6 +133,23 @@ tg-access group add <groupId> [--allow id1,id2] [--no-mention]
 tg-access group rm <groupId>
 tg-access pair <code>
 ```
+
+## Biến thể `:playwright` (render UI + chụp màn hình)
+
+Cho bot cần chạy trình duyệt (dựng UI, chụp screenshot). Biến thể này = image nền + Node 20 thật + Chromium + Playwright (nặng hơn ~1GB, **chỉ amd64**). Build bằng `Dockerfile.playwright`, publish tag `:playwright`.
+
+Cấp Playwright cho một bot:
+
+```bash
+# 1) Chạy / recreate bot bằng image :playwright (giữ nguyên volume + env như thường)
+ghcr.io/trongnguyenbinh/claude-telegram-docker:playwright
+
+# 2) Cắm Playwright MCP bằng BINARY đã bake (KHÔNG dùng npx — npx tải lại package mỗi lần start → lỗi kết nối)
+docker exec -u botuser <bot> claude mcp add --scope user playwright -- playwright-mcp --headless
+docker restart <bot>
+```
+
+> ⚠️ Phải dùng `playwright-mcp --headless` (binary global đã bake), KHÔNG dùng `npx @playwright/mcp@latest` (tải lại mỗi lần boot → MCP "Failed to connect" + có thể kẹt poller).
 
 ## Giấy phép
 

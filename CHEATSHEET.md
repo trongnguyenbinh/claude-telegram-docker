@@ -24,6 +24,20 @@ Thay `<bot>` = tên container (vd `claude-tg-bot-qc`). **Hầu hết lệnh cầ
 
 > `sk-ant-oat...` = OAuth token (thứ CLAUDE_CODE_OAUTH_TOKEN cần), KHÔNG phải API key (`sk-ant-api-...`).
 
+## Chẩn đoán (bot-doctor)
+
+| Việc | Lệnh |
+|---|---|
+| Chẩn đoán toàn diện | `docker exec <bot> bot-doctor` (check tmux/permission/poller/locale/base CLAUDE.md/.workspace/login + in fix) |
+| Trạng thái healthy | `docker ps` — cột STATUS: `healthy`/`unhealthy` (HEALTHCHECK = tg-healthcheck) |
+| Poller kẹt (pending không về 0) | `docker restart <bot>` (1 phát là thông) |
+
+## Chạy bot dưới root
+
+| Việc | Lệnh |
+|---|---|
+| Recreate chạy root | thêm `-e BOT_USER=root -e BOT_HOME=/root` vào `docker run` (exec khỏi cần `-u botuser`) |
+
 ## Xem bot chạy (monitor)
 
 | Việc | Lệnh |
@@ -65,6 +79,15 @@ Thay `<bot>` = tên container (vd `claude-tg-bot-qc`). **Hầu hết lệnh cầ
 |---|---|
 | Liệt kê + trạng thái | `docker exec -u botuser <bot> claude mcp list` |
 | Cắm mempalace | `docker exec -u botuser <bot> claude mcp add --scope user --transport http mempalace https://<domain>/mcp --header "Authorization: Bearer <token>"` rồi `docker restart <bot>` |
+| Cắm Playwright (image `:playwright`) | `docker exec -u botuser <bot> claude mcp add --scope user playwright -- playwright-mcp --headless` rồi `docker restart <bot>` — dùng binary bake, KHÔNG `npx @playwright/mcp@latest` |
+
+## GitHub trong bot (gh)
+
+| Việc | Lệnh / Ghi chú |
+|---|---|
+| Auth gh | recreate với `-e GH_TOKEN=<PAT>` rồi `docker exec -u botuser <bot> gh auth setup-git` |
+| Kiểm tra | `docker exec -u botuser <bot> gh auth status` |
+| Lưu ý | dùng `gh` (đã bake), KHÔNG dùng github MCP plugin (đang lỗi HTTP 400) |
 
 ## Update Claude Code
 
@@ -86,3 +109,7 @@ Thay `<bot>` = tên container (vd `claude-tg-bot-qc`). **Hầu hết lệnh cầ
 | tg-access chạy xong không lưu | thiếu `-u botuser` |
 | GHCR pull `denied` (image public) | creds cũ → `docker logout ghcr.io` rồi pull lại |
 | Bot mới không có plugin đã bake | volume cũ đã seed → `claude plugin install` tay, hoặc volume sạch |
+| Bot như chết sau recreate (session sống nhưng không nhận tin) | poller kẹt, `pending_update_count`>0 không drain → `docker restart <bot>` |
+| Bot cũ thiếu permissions/base CLAUDE.md/.workspace | chỉ seed volume MỚI → merge tay `/data/.claude/settings.json` + recreate/pull image mới, rồi restart |
+| Mất network phụ (vd `db-shared`) sau recreate | recreate trơn không giữ network → thêm `--network <net>` vào `docker run` |
+| Playwright MCP "Failed to connect" | dùng `npx @playwright/mcp@latest` → phải là `playwright-mcp --headless` (binary bake) + image `:playwright` |
