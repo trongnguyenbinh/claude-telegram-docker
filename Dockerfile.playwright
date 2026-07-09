@@ -17,10 +17,14 @@ RUN rm -f /usr/local/bin/node \
  && apt-get update && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/*
 
-# Playwright + Chromium + OS deps, into a world-readable global browser path
-# (the bot runs as non-root botuser, so the browser binaries must be readable by it).
-RUN npm install -g playwright @playwright/mcp \
- && npx playwright install --with-deps chromium \
+# @playwright/mcp (pinned) + the EXACT Chromium build its bundled playwright-core
+# uses, into a world-readable global browser path (the bot runs as non-root botuser,
+# so the browser must be readable by it). IMPORTANT: install Chromium via the MCP's
+# own playwright-core, NOT a separately-installed global `playwright` — the two pin
+# different playwright versions → different Chromium revisions → the MCP looks for a
+# build that isn't there and reports "Chromium not installed".
+RUN npm install -g @playwright/mcp@0.0.77 \
+ && node "$(npm root -g)/@playwright/mcp/node_modules/playwright-core/cli.js" install --with-deps chromium \
  && chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH"
 
 # caveman hooks (`node <script>`) now run on real node (fine). bun stays at
