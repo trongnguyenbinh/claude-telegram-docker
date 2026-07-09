@@ -77,16 +77,7 @@ RUN cfg="$CLAUDE_STAGE/settings.json"; tmp="$(mktemp)"; \
 # own /data/telegram/.env token is NOT blocked) + a few destructive circuit-breakers.
 # allow routine read-only git + gh so bots don't prompt on them.
 RUN cfg="$CLAUDE_STAGE/settings.json"; tmp="$(mktemp)"; \
-    jq '.permissions = ((.permissions // {}) + {
-      deny: ((.permissions.deny // []) + [
-        "Read(.env)","Read(.env.*)","Read(**/.env)","Read(**/.env.*)",
-        "Read(**/secrets/**)","Read(**/id_rsa)","Read(**/id_ed25519)","Read(**/*.pem)",
-        "Bash(rm -rf /)","Bash(rm -rf /*)","Bash(rm -rf ~)","Bash(mkfs *)","Bash(dd if=* of=/dev/*)"
-      ]),
-      allow: ((.permissions.allow // []) + [
-        "Bash(git status)","Bash(git diff *)","Bash(git log *)","Bash(git branch *)","Bash(gh *)"
-      ])
-    })' "$cfg" > "$tmp" && mv "$tmp" "$cfg" \
+    jq '.permissions.deny = ((.permissions.deny // []) + ["Read(.env)","Read(.env.*)","Read(**/.env)","Read(**/.env.*)","Read(**/secrets/**)","Read(**/id_rsa)","Read(**/id_ed25519)","Read(**/*.pem)","Bash(rm -rf /)","Bash(rm -rf /*)","Bash(rm -rf ~)","Bash(mkfs *)","Bash(dd if=* of=/dev/*)"]) | .permissions.allow = ((.permissions.allow // []) + ["Bash(git status)","Bash(git diff *)","Bash(git log *)","Bash(git branch *)","Bash(gh *)"])' "$cfg" > "$tmp" && mv "$tmp" "$cfg" \
  && jq -e '.permissions.deny | index("Read(**/.env)")' "$cfg" >/dev/null
 
 # Bake "onboarding complete" so fresh volumes never hit the first-run wizard
