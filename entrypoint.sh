@@ -41,6 +41,21 @@ for _pf in known_marketplaces.json installed_plugins.json; do
     "$_pfile" || true
 done
 
+# 1c) Seed the baked default CLAUDE.md (security posture + .workspace architecture)
+#     as user-level memory so every bot loads it. A bot's own work-dir CLAUDE.md
+#     layers on top. Copy if absent (covers fresh volumes AND existing bots on pull).
+if [ -f /usr/local/share/claude-telegram/CLAUDE.md ] && [ ! -f "$CLAUDE_CONFIG_DIR/CLAUDE.md" ]; then
+  cp /usr/local/share/claude-telegram/CLAUDE.md "$CLAUDE_CONFIG_DIR/CLAUDE.md"
+  echo "[entrypoint] seeded default CLAUDE.md into $CLAUDE_CONFIG_DIR"
+fi
+
+# 1d) Create the .workspace second-brain skeleton in the work dir (first run only).
+if [ ! -d "$WORK_DIR/.workspace" ]; then
+  mkdir -p "$WORK_DIR/.workspace"/{rules,memory,events,status}
+  printf '# MEMORY.md — index bộ nhớ bền của bot\n\nMỗi dòng trỏ tới 1 file trong memory/. Đọc đầu mỗi phiên để bắt nhịp.\n' > "$WORK_DIR/.workspace/memory/MEMORY.md"
+  echo "[entrypoint] created .workspace/{rules,memory,events,status} skeleton"
+fi
+
 # 2) Seed the telegram plugin token file (gitignored secret) — first run only.
 if [ ! -f "$TELEGRAM_STATE_DIR/.env" ]; then
   umask 077
@@ -131,4 +146,4 @@ echo "[entrypoint] xem session:  docker exec -it -u $BOT_USER <container> tmux a
 # foreground process (needs tty:true / -it). When claude exits the session ends →
 # tmux exits → container exits → restart policy restarts it.
 exec gosu "$BOT_USER" env HOME="$BOT_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" TELEGRAM_STATE_DIR="$TELEGRAM_STATE_DIR" WORK_DIR="$WORK_DIR" \
-  tmux new-session -s claude "$CLAUDE_CMD"
+  tmux -u new-session -s claude "$CLAUDE_CMD"

@@ -22,6 +22,11 @@ RUN mkdir -p /etc/apt/keyrings \
  && apt-get update && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
 
+# --- UTF-8 locale so the tmux session renders Vietnamese (and other non-ASCII)
+#     correctly when the owner attaches. debian-slim defaults to the C locale,
+#     which mangles multi-byte UTF-8. C.UTF-8 is built in (no locales pkg needed). ---
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 LANGUAGE=C.UTF-8
+
 # --- non-root user ---
 RUN useradd -m -u 1000 -s /bin/bash botuser
 ENV BOT_USER=botuser BOT_HOME=/home/botuser
@@ -67,6 +72,23 @@ RUN cfg="$CLAUDE_STAGE/settings.json"; tmp="$(mktemp)"; \
  && mv "$tmp" "$cfg" \
  && grep -q "rtk hook claude" "$cfg"
 
+# --- Bake default security permissions into the staged settings.json ---
+# deny reading secrets in the work dir / cloned repos (cwd-anchored, so the bot's
+# own /data/telegram/.env token is NOT blocked) + a few destructive circuit-breakers.
+# allow routine read-only git + gh so bots don't prompt on them.
+RUN cfg="$CLAUDE_STAGE/settings.json"; tmp="$(mktemp)"; \
+    jq '.permissions = ((.permissions // {}) + {
+      deny: ((.permissions.deny // []) + [
+        "Read(.env)","Read(.env.*)","Read(**/.env)","Read(**/.env.*)",
+        "Read(**/secrets/**)","Read(**/id_rsa)","Read(**/id_ed25519)","Read(**/*.pem)",
+        "Bash(rm -rf /)","Bash(rm -rf /*)","Bash(rm -rf ~)","Bash(mkfs *)","Bash(dd if=* of=/dev/*)"
+      ]),
+      allow: ((.permissions.allow // []) + [
+        "Bash(git status)","Bash(git diff *)","Bash(git log *)","Bash(git branch *)","Bash(gh *)"
+      ])
+    })' "$cfg" > "$tmp" && mv "$tmp" "$cfg" \
+ && jq -e '.permissions.deny | index("Read(**/.env)")' "$cfg" >/dev/null
+
 # Bake "onboarding complete" so fresh volumes never hit the first-run wizard
 # (theme picker), which would hang a detached `claude --channels`.
 RUN if [ -s "$CLAUDE_STAGE/.claude.json" ]; then \
@@ -86,6 +108,10 @@ RUN ln -sf /home/botuser/.bun/bin/bun /usr/local/bin/bun \
 
 COPY scripts/tg-access /usr/local/bin/tg-access
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+# Default base CLAUDE.md (security + .workspace architecture) — entrypoint seeds it
+# to $CLAUDE_CONFIG_DIR/CLAUDE.md (user-level memory) so every bot loads it; a bot's
+# own work-dir CLAUDE.md layers on top.
+COPY scripts/default-CLAUDE.md /usr/local/share/claude-telegram/CLAUDE.md
 RUN chmod +x /usr/local/bin/tg-access /usr/local/bin/entrypoint.sh
 
 # --- runtime config: config + state live on the volume so login + access persist ---
