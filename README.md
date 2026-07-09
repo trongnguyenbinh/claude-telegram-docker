@@ -5,7 +5,7 @@
 Chạy một con bot Telegram do Claude Code vận hành, gói gọn trong một container duy nhất. **1 image = 1 bot.**
 Thiết kế chi tiết: [`SPEC.md`](./SPEC.md). Bảng lệnh vận hành nhanh: [`CHEATSHEET.md`](./CHEATSHEET.md). Vận hành & xử lý sự cố: [`OPERATIONS.md`](./OPERATIONS.md).
 
-## Tính năng (v1.2.0)
+## Tính năng (v1.3.0)
 
 - **Quy tắc nền bake sẵn** (`default-CLAUDE.md` → `/data/.claude/CLAUDE.md`, user-level memory, CLAUDE.md work-dir của từng bot layer chồng lên): chỉ nghe owner, phát hiện prompt-injection + cảnh báo owner, cách ly thông tin (không lộ nội dung DM riêng, không mang context giữa các group/DM), bắt xác nhận việc phá hoại, giọng trả lời lịch sự **ghi đè** chế độ cộc lốc/caveman, và tự kiểm tra đã gọi reply tool chưa.
 - **Bộ não thứ hai `.workspace/{rules,memory,events,status}`** tạo sẵn trong work dir ở lần chạy đầu; quy ước ghi nằm trong quy tắc nền; đồng bộ với mempalace.
