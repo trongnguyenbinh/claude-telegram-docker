@@ -72,6 +72,14 @@ RUN cfg="$CLAUDE_STAGE/settings.json"; tmp="$(mktemp)"; \
  && mv "$tmp" "$cfg" \
  && grep -q "rtk hook claude" "$cfg"
 
+# --- SessionStart hook: auto-load the bot's .workspace context every session start
+# (and after compaction) so a fresh session post-recreate knows what it was doing +
+# who it reports to, instead of starting "blank". stdout is injected as context.
+RUN cfg="$CLAUDE_STAGE/settings.json"; tmp="$(mktemp)"; \
+    jq '.hooks.SessionStart = ((.hooks.SessionStart // []) + [{"matcher":"startup","hooks":[{"type":"command","command":"tg-session-context"}]},{"matcher":"compact","hooks":[{"type":"command","command":"tg-session-context"}]}])' "$cfg" > "$tmp" \
+ && mv "$tmp" "$cfg" \
+ && grep -q "tg-session-context" "$cfg"
+
 # --- Bake default security permissions into the staged settings.json ---
 # deny reading secrets in the work dir / cloned repos (cwd-anchored, so the bot's
 # own /data/telegram/.env token is NOT blocked) + a few destructive circuit-breakers.
@@ -107,7 +115,8 @@ COPY scripts/default-CLAUDE.md /usr/local/share/claude-telegram/CLAUDE.md
 COPY scripts/bot-doctor /usr/local/bin/bot-doctor
 COPY scripts/tg-healthcheck /usr/local/bin/tg-healthcheck
 COPY scripts/tg-watchdog /usr/local/bin/tg-watchdog
-RUN chmod +x /usr/local/bin/tg-access /usr/local/bin/entrypoint.sh /usr/local/bin/bot-doctor /usr/local/bin/tg-healthcheck /usr/local/bin/tg-watchdog \
+COPY scripts/tg-session-context /usr/local/bin/tg-session-context
+RUN chmod +x /usr/local/bin/tg-access /usr/local/bin/entrypoint.sh /usr/local/bin/bot-doctor /usr/local/bin/tg-healthcheck /usr/local/bin/tg-watchdog /usr/local/bin/tg-session-context \
  && printf '* * * * * root /usr/local/bin/tg-watchdog >> /tmp/tg-watchdog.log 2>&1\n' > /etc/cron.d/tg-watchdog \
  && chmod 0644 /etc/cron.d/tg-watchdog
 

@@ -34,7 +34,7 @@ Tự quản một "bộ não thứ hai" dạng file local trong work dir, cấu 
 **Quy ước ghi:**
 - `memory/<slug>.md` — mỗi file 1 sự thật, frontmatter `type: user | feedback | project | reference`. Thêm 1 dòng vào `MEMORY.md` (index) trỏ tới file. Link chéo bằng `[[slug]]`.
 - `events/YYYY-MM-DD-<việc>.md` — mỗi việc đáng nhớ ghi kèm mốc thời gian THẬT (lấy bằng lệnh `date`).
-- `status/` — file trạng thái task đang làm; cập nhật khi bắt đầu / đổi / xong.
+- `status/` — file trạng thái task đang làm; cập nhật khi bắt đầu / đổi / xong. **QUAN TRỌNG:** GHI status ngay khi nhận việc + đang làm dở (đang làm gì, cho ai, bước tiếp theo). Đây là thứ giúp phiên MỚI (sau khi container recreate) biết mình đang làm gì mà không "ngơ" — vì có 1 SessionStart hook TỰ nạp `status/` + `MEMORY.md` vào đầu mỗi phiên. Không ghi status = phiên sau mất dấu việc dở.
 - `rules/` — owner dặn cách làm việc → ghi lại để lần sau nhớ.
 - **Đầu mỗi phiên**: đọc `MEMORY.md` + `status/` để bắt nhịp công việc.
 - **Nếu bot có mempalace (não chung):** định kỳ / khi được yêu cầu, KÉO các memory liên quan tới mình từ mempalace về + ghi-cập nhật xuống `.workspace/memory/` (giữ local đồng bộ với mempalace → nhớ context kể cả khi mất mạng). Local + mempalace bổ trợ nhau, không thay thế.

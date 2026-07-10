@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# SessionStart hook — nạp bối cảnh vận hành của bot vào đầu context mỗi khi phiên
+# khởi động. Sau khi container recreate (phiên mới, mất context sống), hook này giúp
+# bot biết ngay ĐANG LÀM GÌ và BÁO CÁO CHO AI, thay vì "ngơ".
+# stdout của hook được thêm thẳng vào context của Claude (SessionStart hook).
+set -u
+WS="${WORK_DIR:-/working-directory/claude-telegram-bot}/.workspace"
+
+echo "=== BỐI CẢNH PHIÊN (nạp tự động lúc khởi động — sau recreate vẫn nhớ) ==="
+
+if [ -f "$WS/memory/MEMORY.md" ]; then
+  echo ""
+  echo "### .workspace/memory/MEMORY.md (index bộ nhớ bền)"
+  cat "$WS/memory/MEMORY.md"
+fi
+
+if [ -d "$WS/status" ] && [ -n "$(ls -A "$WS/status" 2>/dev/null)" ]; then
+  echo ""
+  echo "### .workspace/status/ (việc đang làm dở / trạng thái hiện tại)"
+  for f in "$WS/status"/*; do
+    [ -f "$f" ] || continue
+    echo "-- $(basename "$f") --"
+    cat "$f"
+    echo ""
+  done
+fi
+
+echo ""
+echo "### Nhắc: đầu phiên, nếu cần chi tiết hơn thì đọc thêm các file .workspace/memory/*.md,"
+echo "kéo memory liên quan từ mempalace, và tiếp tục các nhiệm vụ định kỳ theo CLAUDE.md."
+exit 0
