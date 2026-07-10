@@ -72,6 +72,13 @@ RUN cfg="$CLAUDE_STAGE/settings.json"; tmp="$(mktemp)"; \
  && mv "$tmp" "$cfg" \
  && grep -q "rtk hook claude" "$cfg"
 
+# --- Default reasoning effort: high — bots think deeper by default. Only seeds
+# FRESH volumes (existing bots keep whatever effortLevel their /data settings has;
+# change a running bot via its /data/.claude/settings.json + restart).
+RUN cfg="$CLAUDE_STAGE/settings.json"; tmp="$(mktemp)"; \
+    jq '.effortLevel = "high"' "$cfg" > "$tmp" && mv "$tmp" "$cfg" \
+ && jq -e '.effortLevel == "high"' "$cfg" >/dev/null
+
 # --- SessionStart hook: auto-load the bot's .workspace context every session start
 # (and after compaction) so a fresh session post-recreate knows what it was doing +
 # who it reports to, instead of starting "blank". stdout is injected as context.
