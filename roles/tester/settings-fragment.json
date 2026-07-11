@@ -1,0 +1,9 @@
+{
+  "_note": "Vai trò Tester/QA: đọc issue/release + tạo file testcase qua gh; đối chiếu đặc tả (mempalace). Không cần plugin FE. gh bake sẵn.",
+  "enabledPlugins": {},
+  "permissions": {
+    "allow": [
+      "Bash(gh *)"
+    ]
+  }
+}

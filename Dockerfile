@@ -118,6 +118,10 @@ COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 # to $CLAUDE_CONFIG_DIR/CLAUDE.md (user-level memory) so every bot loads it; a bot's
 # own work-dir CLAUDE.md layers on top.
 COPY scripts/default-CLAUDE.md /usr/local/share/claude-telegram/CLAUDE.md
+# Role profiles (BOT_ROLE=ba|planner|dev-fe|dev-be|tester). Text files only; the
+# entrypoint seeds the matching role's CLAUDE.md/settings-fragment/rules on first run
+# when BOT_ROLE is set. Unset/empty/default = base behavior unchanged. See roles/README.md.
+COPY roles/ /usr/local/share/claude-telegram/roles/
 # Ops tooling: bot-doctor (on-demand diagnosis) + tg-healthcheck (Docker HEALTHCHECK liveness).
 COPY scripts/bot-doctor /usr/local/bin/bot-doctor
 COPY scripts/tg-healthcheck /usr/local/bin/tg-healthcheck

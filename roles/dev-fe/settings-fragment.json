@@ -1,0 +1,16 @@
+{
+  "_note": "Vai trò Dev Frontend: code UI (frontend-design bake sẵn) + Vercel preview + Playwright smoke test. Playwright cần image :playwright rồi `claude mcp add playwright -- playwright-mcp --headless`. Cho phép thêm vài lệnh git thường dùng khi cặp code để bớt hỏi vặt.",
+  "enabledPlugins": {
+    "frontend-design@claude-plugins-official": true
+  },
+  "permissions": {
+    "allow": [
+      "Bash(gh *)",
+      "Bash(vercel *)",
+      "Bash(git checkout *)",
+      "Bash(git switch *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  }
+}

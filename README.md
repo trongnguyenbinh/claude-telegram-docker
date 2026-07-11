@@ -5,7 +5,7 @@
 Chạy một con bot Telegram do Claude Code vận hành, gói gọn trong một container duy nhất. **1 image = 1 bot.**
 Thiết kế chi tiết: [`SPEC.md`](./SPEC.md). Bảng lệnh vận hành nhanh: [`CHEATSHEET.md`](./CHEATSHEET.md). Vận hành & xử lý sự cố: [`OPERATIONS.md`](./OPERATIONS.md).
 
-## Tính năng (v1.3.0)
+## Tính năng (v1.5.0)
 
 - **Quy tắc nền bake sẵn** (`default-CLAUDE.md` → `/data/.claude/CLAUDE.md`, user-level memory, CLAUDE.md work-dir của từng bot layer chồng lên): chỉ nghe owner, phát hiện prompt-injection + cảnh báo owner, cách ly thông tin (không lộ nội dung DM riêng, không mang context giữa các group/DM), bắt xác nhận việc phá hoại, giọng trả lời lịch sự **ghi đè** chế độ cộc lốc/caveman, và tự kiểm tra đã gọi reply tool chưa.
 - **Bộ não thứ hai `.workspace/{rules,memory,events,status}`** tạo sẵn trong work dir ở lần chạy đầu; quy ước ghi nằm trong quy tắc nền; đồng bộ với mempalace.
@@ -16,6 +16,7 @@ Thiết kế chi tiết: [`SPEC.md`](./SPEC.md). Bảng lệnh vận hành nhanh
 - **Chạy dưới root** (không cần đổi image): `-e BOT_USER=root -e BOT_HOME=/root`.
 - **Công cụ vận hành**: `bot-doctor` (`docker exec <bot> bot-doctor` — check tmux session / permission mode / poller pending-drain / locale / base CLAUDE.md / .workspace / login + in cách fix) và `tg-healthcheck` gắn làm Docker HEALTHCHECK (đánh dấu container `unhealthy` khi tmux session `claude` chết). Playbook + gotcha ở [`OPERATIONS.md`](./OPERATIONS.md).
 - **Biến thể `:playwright`** cho bot cần render UI + chụp màn hình (xem mục dưới).
+- **Bot chuyên trách (role profiles)** qua `-e BOT_ROLE=<ba|planner|dev-fe|dev-be|tester>`: seed thêm 1 lớp CLAUDE.md + settings + rules cho từng vai trò trong quy trình delivery, chồng lên base. Bỏ trống = mặc định như cũ (xem mục dưới).
 
 ## Bắt đầu nhanh (dùng image đã publish — khỏi build, khỏi clone)
 
@@ -105,6 +106,7 @@ docker exec -u botuser claude-tg-bot claude auth status   # loggedIn:true
 | `OWNER_ID` | ✅ | Telegram user_id của bạn (1 owner duy nhất) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | khuyến nghị | xác thực headless — tạo một lần bằng `claude setup-token`, dán vào đây. Sống sót khi xoá volume. |
 | `PERMISSION_MODE` | tuỳ chọn | `auto`/`default`/`acceptEdits`/`bypassPermissions`/`manual`/`plan`. **Bỏ trống = `auto`** — Auto Mode có classifier: tự duyệt hành động an toàn, chặn hành động rủi ro/production → bot chạy nền không treo mà vẫn an toàn. Override khi cần, vd `acceptEdits`. |
+| `BOT_ROLE` | tuỳ chọn | Bot chuyên trách: `ba`/`planner`/`dev-fe`/`dev-be`/`tester`. Seed CLAUDE.md + settings + rules của vai trò (layer trên base) ở lần chạy đầu. **Bỏ trống / `default` = hành vi mặc định như cũ.** Xem [Bot chuyên trách](#bot-chuyên-trách-role-profiles) + `roles/README.md`. |
 | `WORK_DIR` | tuỳ chọn | thư mục claude của bot chạy trong đó (file ops rơi vào đây, đã pre-trust). Mặc định `/working-directory/claude-telegram-bot`; lưu trên volume `botwork`. |
 | `ANTHROPIC_API_KEY` | dự phòng | trả tiền theo token thay vì dùng subscription |
 | `MODEL` / `TZ` | tuỳ chọn | |
@@ -133,6 +135,30 @@ tg-access group add <groupId> [--allow id1,id2] [--no-mention]
 tg-access group rm <groupId>
 tg-access pair <code>
 ```
+
+## Bot chuyên trách (role profiles)
+
+Một bot có thể khởi động ở một **vai trò** trong quy trình delivery bằng AI (Define/BA → Planning → Build → Tester/QA) qua biến `BOT_ROLE`. Mỗi vai trò seed thêm 1 lớp CLAUDE.md "cách làm việc" + `settings-fragment` + rules, **layer chồng lên** base CLAUDE.md (bảo mật, cách ly thông tin, `.workspace`, giọng trả lời vẫn là nền chung).
+
+| `BOT_ROLE` | Giai đoạn | Bot làm gì |
+|---|---|---|
+| `ba` | Define | Phân tích đề bài, viết acceptance criteria + tài liệu, dựng prototype UI → Vercel preview; PO/BA accept → tạo GitHub Issue + sync mempalace + publish handoff. |
+| `planner` | Planning | Phân rã issue cha → sub-issue theo mảng (`area:frontend/backend/db/infra/qa`) + estimate + link cha → Projects board → publish + @mention. |
+| `dev-fe` | Build (FE) | Nhặt sub-issue `area:frontend` → branch → code UI → PR `Closes #issue`; biết gate Sonar + security; frontend-design + Vercel + Playwright. |
+| `dev-be` | Build (BE) | Nhặt sub-issue `area:backend` → branch → code API/DB + migration → PR `Closes #issue`; ý thức migration/db + gate. |
+| `tester` | Tester/QA | Từ release note hướng dẫn test + tạo testcase; nhận log-issue web UAT → đối chiếu đặc tả + mempalace → nghi bug thật thì publish channel + tag Lead. |
+
+**Bỏ trống / không đặt / `default` = hành vi mặc định như cũ, KHÔNG đổi gì** (bot hiện có không bị ảnh hưởng). Role không hợp lệ → entrypoint log cảnh báo rồi chạy như mặc định.
+
+```bash
+# ví dụ: khởi động bot BA
+docker run -d --name thedots-ba \
+  -e TELEGRAM_BOT_TOKEN=<token> -e OWNER_ID=<id> -e BOT_ROLE=ba \
+  -v thedots-ba-data:/data --restart unless-stopped \
+  ghcr.io/trongnguyenbinh/claude-telegram-docker:latest
+```
+
+> CLAUDE.md của vai trò chỉ seed khi work-dir CHƯA có CLAUDE.md (không đè file riêng của bot). Phần `settings-fragment` là union (chạy lại vô hại). Cách thêm vai trò mới: xem [`roles/README.md`](./roles/README.md).
 
 ## Biến thể `:playwright` (render UI + chụp màn hình)
 

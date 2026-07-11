@@ -44,6 +44,8 @@ Dockerfile.playwright   ← :playwright variant (FROM base + Node + Chromium)
 entrypoint.sh           ← first-run seeding (idempotent, self-healing) + launch in tmux
 scripts/                ← baked tools: tg-access, bot-doctor, tg-healthcheck,
                           tg-watchdog, default-CLAUDE.md
+roles/                  ← role profiles (BOT_ROLE): per-role CLAUDE.md +
+                          settings-fragment.json + optional rules/ (see roles/README.md)
 .github/workflows/      ← CI (build + push both image variants)
 SPEC.md · README.md · README.en.md · CHEATSHEET.md · OPERATIONS.md
 ```
@@ -88,6 +90,17 @@ CLAUDE.md (owner-only authority, no secret leakage, verify before claiming done)
   (`Dockerfile.playwright`), never the base.
 - **MCP-bundled tools**: install a tool's browser/runtime via the tool's OWN bundled
   version, never a separately-pinned global (versions drift — see `OPERATIONS.md`).
+
+## Adding a role
+
+Role profiles (`BOT_ROLE=ba|planner|dev-fe|dev-be|tester`) live in [`roles/`](./roles/).
+To add one, create `roles/<role>/` with a `CLAUDE.md` (the role's "how I work" rules,
+layered on top of the base), a minimal valid `settings-fragment.json` (extra
+`enabledPlugins` + `permissions.allow`, never disabling base plugins), and optionally
+`rules/*.md`. No `entrypoint.sh` change is needed — it reads `$BOT_ROLE` dynamically and
+`Dockerfile` already `COPY roles/`. Verify `jq . roles/<role>/settings-fragment.json`
+parses and `bash -n entrypoint.sh` is clean, then update the role tables in the READMEs.
+Full guide: [`roles/README.md`](./roles/README.md).
 
 ## Security
 

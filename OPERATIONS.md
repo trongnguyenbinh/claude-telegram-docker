@@ -44,6 +44,14 @@ Quy trình:
   session KHÔNG bền qua restart; phải set ở env → recreate.
 - **Chạy dưới root** — không cần feature riêng: `-e BOT_USER=root -e BOT_HOME=/root` (entrypoint
   `gosu $BOT_USER`).
+- **Bot chuyên trách (`BOT_ROLE`)** — đặt `-e BOT_ROLE=<ba|planner|dev-fe|dev-be|tester>` lúc
+  `docker run`/recreate. Lần chạy đầu entrypoint seed CLAUDE.md của vai trò vào work-dir CLAUDE.md
+  (`$WORK_DIR/CLAUDE.md`) + jq-merge `settings-fragment.json` (union enabledPlugins + permissions.allow)
+  + seed `rules/` vào `.workspace/rules/`. **CLAUDE.md chỉ seed khi work-dir CHƯA có CLAUDE.md** — đổi
+  `BOT_ROLE` trên bot đã chạy (đã có work-dir CLAUDE.md) sẽ KHÔNG tự thay CLAUDE.md; muốn đổi thật thì
+  xoá/đổi tên `$WORK_DIR/CLAUDE.md` rồi restart, hoặc volume sạch. Phần settings-merge là union nên
+  chạy lại vô hại. Bỏ trống / `default` / role không tồn tại = hành vi mặc định như cũ (log 1 dòng note),
+  bot cũ KHÔNG bị ảnh hưởng. Chi tiết: `roles/README.md`.
 - **Tiếng Việt vỡ trong tmux** — thiếu locale UTF-8 (debian-slim mặc định C). Image đã đặt
   `LANG=C.UTF-8` + `tmux -u`. Bot cũ: recreate từ image mới.
 - **GitHub trong bot** — dùng `gh` (đã baked), auth `-e GH_TOKEN=<PAT>` + `gh auth setup-git`.

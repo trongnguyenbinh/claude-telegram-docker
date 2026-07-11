@@ -11,6 +11,7 @@ Thay `<bot>` = tên container (vd `claude-tg-bot-qc`). **Hầu hết lệnh cầ
 | Restart (giữ mọi thứ) | `docker restart <bot>` |
 | Recreate (đổi env, GIỮ volume) | `docker rm -f <bot> && docker run -d --name <bot> -it --restart unless-stopped -e ... -v <bot>-data:/data -v <bot>-work:/working-directory <image>` |
 | Chạy bot mới | như trên với volume + token mới |
+| Chạy bot chuyên trách (role) | thêm `-e BOT_ROLE=<ba\|planner\|dev-fe\|dev-be\|tester>` vào `docker run` — seed CLAUDE.md + settings + rules của vai trò (lần đầu). Bỏ trống = mặc định như cũ. Xem `roles/README.md` |
 
 ## Đăng nhập / Auth
 

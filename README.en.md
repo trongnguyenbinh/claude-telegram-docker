@@ -5,7 +5,7 @@
 Run a Claude-Code-powered Telegram bot as a single container. **1 image = 1 bot.**
 Full design: [`SPEC.md`](./SPEC.md). Quick command table: [`CHEATSHEET.md`](./CHEATSHEET.md). Operations & troubleshooting: [`OPERATIONS.md`](./OPERATIONS.md).
 
-## Features (v1.3.0)
+## Features (v1.5.0)
 
 - **Baked base rules** (`default-CLAUDE.md` → `/data/.claude/CLAUDE.md`, user-level memory; each bot's work-dir CLAUDE.md layers on top): owner-only authority, prompt-injection detection + owner alert, information isolation (never leak owner DM content, never carry context across groups/DMs), destructive-op confirmation, a polite reply tone that **overrides** caveman/terse mode for user-facing replies, and a reply self-check (did I actually call the reply tool?).
 - **Second-brain `.workspace/{rules,memory,events,status}`** skeleton created in the work dir on first run; conventions live in the base rules; syncs with mempalace.
@@ -16,6 +16,7 @@ Full design: [`SPEC.md`](./SPEC.md). Quick command table: [`CHEATSHEET.md`](./CH
 - **Run as root** (no image change): `-e BOT_USER=root -e BOT_HOME=/root`.
 - **Ops tooling**: `bot-doctor` (`docker exec <bot> bot-doctor` — checks tmux session / permission mode / poller pending-drain / locale / base CLAUDE.md / .workspace / login + prints the fix) and `tg-healthcheck` wired as a Docker HEALTHCHECK (marks the container `unhealthy` if the tmux `claude` session dies). Playbook + gotchas in [`OPERATIONS.md`](./OPERATIONS.md).
 - **`:playwright` variant** for bots that render UI + screenshot (see below).
+- **Role profiles** via `-e BOT_ROLE=<ba|planner|dev-fe|dev-be|tester>`: layer a role-specific CLAUDE.md + settings + rules on top of the base for each stage of the delivery workflow. Unset = unchanged default behavior (see below).
 
 ## Quick start (from the published image — no build, no clone)
 
@@ -88,6 +89,7 @@ docker exec claude-tg-bot claude auth status   # loggedIn:true
 | `OWNER_ID` | ✅ | your Telegram user_id (single owner) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | recommended | headless auth — generate once with `claude setup-token`, paste here. Survives volume wipes. |
 | `PERMISSION_MODE` | optional | `auto`/`default`/`acceptEdits`/`bypassPermissions`/`manual`/`plan`. **Unset = `auto`** — classifier-gated Auto Mode: auto-approves safe actions, blocks risky/production ones → runs unattended without hanging, still safe. Override when needed, e.g. `acceptEdits` (which still prompts on every Bash command). |
+| `BOT_ROLE` | optional | Specialized role: `ba`/`planner`/`dev-fe`/`dev-be`/`tester`. Seeds the role's CLAUDE.md + settings + rules (layered on the base) on first run. **Unset / `default` = unchanged default behavior.** See [Role profiles](#role-profiles) + `roles/README.md`. |
 | `WORK_DIR` | optional | dir the bot's claude runs in (file ops land here, pre-trusted). Default `/working-directory/claude-telegram-bot`; persisted on the `botwork` volume. |
 | `ANTHROPIC_API_KEY` | fallback | pay-per-token instead of your subscription |
 | `MODEL` / `TZ` | optional | |
@@ -112,6 +114,30 @@ tg-access group add <groupId> [--allow id1,id2] [--no-mention]
 tg-access group rm <groupId>
 tg-access pair <code>
 ```
+
+## Role profiles
+
+A bot can boot into a **role** in the AI delivery workflow (Define/BA → Planning → Build → Tester/QA) via `BOT_ROLE`. Each role seeds a role-specific "how I work" CLAUDE.md + `settings-fragment` + rules that **layer on top of** the base CLAUDE.md (security, info-isolation, `.workspace`, reply tone stay the shared base).
+
+| `BOT_ROLE` | Stage | What the bot does |
+|---|---|---|
+| `ba` | Define | Analyze the brief, write acceptance criteria + docs, build a UI prototype → Vercel preview; on PO/BA accept → create a GitHub Issue + sync mempalace + publish handoff. |
+| `planner` | Planning | Break a parent issue into area sub-issues (`area:frontend/backend/db/infra/qa`) + estimate + link to parent → Projects board → publish + @mention. |
+| `dev-fe` | Build (FE) | Pick an `area:frontend` sub-issue → branch → code UI → PR `Closes #issue`; gate-aware (Sonar + security); frontend-design + Vercel + Playwright. |
+| `dev-be` | Build (BE) | Pick an `area:backend` sub-issue → branch → code API/DB + migration → PR `Closes #issue`; migration/db + gate awareness. |
+| `tester` | Tester/QA | From the release note write test guidance + testcases; receive a UAT web log-issue → cross-check spec + mempalace → if it looks like a real bug, publish to the channel + tag the Lead. |
+
+**Unset / empty / `default` = unchanged default behavior** (existing bots are unaffected). An unknown role → the entrypoint logs a note and runs as default.
+
+```bash
+# example: launch a BA bot
+docker run -d --name thedots-ba \
+  -e TELEGRAM_BOT_TOKEN=<token> -e OWNER_ID=<id> -e BOT_ROLE=ba \
+  -v thedots-ba-data:/data --restart unless-stopped \
+  ghcr.io/trongnguyenbinh/claude-telegram-docker:latest
+```
+
+> The role CLAUDE.md is seeded only when the work-dir has no CLAUDE.md yet (never clobbers a per-bot file). The `settings-fragment` merge is a union (safe to re-run). To add a new role, see [`roles/README.md`](./roles/README.md).
 
 ## `:playwright` variant (render UI + screenshot)
 

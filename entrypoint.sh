@@ -56,6 +56,56 @@ if [ ! -d "$WORK_DIR/.workspace" ]; then
   echo "[entrypoint] created .workspace/{rules,memory,events,status} skeleton"
 fi
 
+# 1e) Role profile (BOT_ROLE): layer a specialized work-dir CLAUDE.md + settings +
+#     rules on top of the baked base. Unset / empty / "default" or an unknown role →
+#     DO NOTHING (default behavior unchanged). Idempotent: only seeds the work-dir
+#     CLAUDE.md when the bot has none (never clobber a per-bot file); the settings
+#     merge is a union (safe to re-run every boot).
+ROLE="${BOT_ROLE:-}"
+ROLES_ROOT="/usr/local/share/claude-telegram/roles"
+if [ -n "$ROLE" ] && [ "$ROLE" != "default" ]; then
+  ROLE_SRC="$ROLES_ROOT/$ROLE"
+  if [ -d "$ROLE_SRC" ]; then
+    # a) seed the role CLAUDE.md as the bot's work-dir CLAUDE.md, only if absent.
+    if [ -f "$ROLE_SRC/CLAUDE.md" ] && [ ! -f "$WORK_DIR/CLAUDE.md" ]; then
+      cp "$ROLE_SRC/CLAUDE.md" "$WORK_DIR/CLAUDE.md"
+      echo "[entrypoint] role '$ROLE': seeded CLAUDE.md -> $WORK_DIR/CLAUDE.md"
+    fi
+    # b) jq-merge settings-fragment.json into the bot's settings.json
+    #    (union enabledPlugins + permissions.allow; never clobber existing / disable base plugins).
+    _frag="$ROLE_SRC/settings-fragment.json"
+    _cfg="$CLAUDE_CONFIG_DIR/settings.json"
+    if [ -f "$_frag" ] && [ -f "$_cfg" ]; then
+      _tmp="$(mktemp)"
+      if jq -s '
+        .[0] as $b | .[1] as $f | $b
+        | .enabledPlugins = ((.enabledPlugins // {}) + ($f.enabledPlugins // {}))
+        | .permissions = (.permissions // {})
+        | .permissions.allow = (((.permissions.allow // []) + ($f.permissions.allow // [])) | unique)
+      ' "$_cfg" "$_frag" > "$_tmp" 2>/dev/null; then
+        mv "$_tmp" "$_cfg"
+        echo "[entrypoint] role '$ROLE': merged settings-fragment.json into settings.json"
+      else
+        rm -f "$_tmp"
+        echo "[entrypoint] role '$ROLE': WARN settings-fragment merge failed (kept existing settings.json)"
+      fi
+    fi
+    # c) seed role behavior rules into .workspace/rules/ (skip files already there).
+    if [ -d "$ROLE_SRC/rules" ]; then
+      mkdir -p "$WORK_DIR/.workspace/rules"
+      for _r in "$ROLE_SRC/rules/"*.md; do
+        [ -f "$_r" ] || continue
+        _dest="$WORK_DIR/.workspace/rules/$(basename "$_r")"
+        [ -f "$_dest" ] || cp "$_r" "$_dest"
+      done
+      echo "[entrypoint] role '$ROLE': seeded rules -> $WORK_DIR/.workspace/rules/"
+    fi
+    echo "[entrypoint] role profile applied: $ROLE"
+  else
+    echo "[entrypoint] NOTE: BOT_ROLE='$ROLE' requested but no roles/$ROLE in image -> ignoring (default behavior)"
+  fi
+fi
+
 # 2) Seed the telegram plugin token file (gitignored secret) — first run only.
 if [ ! -f "$TELEGRAM_STATE_DIR/.env" ]; then
   umask 077

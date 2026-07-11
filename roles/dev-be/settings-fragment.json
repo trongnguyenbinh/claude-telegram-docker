@@ -1,0 +1,13 @@
+{
+  "_note": "Vai trò Dev Backend: code API/DB + migration; không cần plugin FE. gh bake sẵn. Cho phép thêm vài lệnh git thường dùng khi cặp code để bớt hỏi vặt. Không nới quyền cho migration phá huỷ: những lệnh đó vẫn phải qua xác nhận owner/Lead.",
+  "enabledPlugins": {},
+  "permissions": {
+    "allow": [
+      "Bash(gh *)",
+      "Bash(git checkout *)",
+      "Bash(git switch *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  }
+}

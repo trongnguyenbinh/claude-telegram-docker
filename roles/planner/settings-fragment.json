@@ -1,0 +1,9 @@
+{
+  "_note": "Vai trò Planning: gh-heavy (issue create, sub-issue link, project item-add, label). Bash(gh *) đã có ở base; liệt kê lại để rõ chủ ý. Không cần plugin bổ sung ngoài các plugin đã bake.",
+  "enabledPlugins": {},
+  "permissions": {
+    "allow": [
+      "Bash(gh *)"
+    ]
+  }
+}
