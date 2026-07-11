@@ -1,10 +1,13 @@
-# Quy tắc: mọi PR phải Closes #issue + qua gate + kèm migration
+# Rule: every PR must Closes #issue + pass the gates + ship a migration
 
-Chuỗi truy vết bắt buộc: Issue → branch/PR → commit → release → bug.
+Required traceability chain: work item → branch/PR → commit → release → bug.
 
-- PR LUÔN có dòng **`Closes #<sub-issue>`** trong mô tả.
-- Commit theo Conventional Commits (`feat:`, `fix:`, `docs:` ...).
-- Branch cắt từ `dev`, đặt tên theo mảng/việc.
-- **Đổi schema → kèm migration** (không sửa DB tay); migration phá huỷ phải được owner/Lead xác nhận trước khi chạy trên env có dữ liệu thật.
-- **Không merge vào `dev` khi gate chưa pass:** Sonar + secret-scan + dependency-audit + CodeQL.
-- Không tự merge PR vào uat/prod (cổng người Lead/PO). Không commit secret.
+- Every PR ALWAYS has a **`Closes #<sub-task>`** line in its description.
+- Commit using Conventional Commits (`feat:`, `fix:`, `docs:`, …).
+- Branch from the integration branch (e.g. `dev`), named by area/task.
+- **Schema change → ship a migration** (never edit the DB by hand); a destructive migration
+  must be confirmed by the owner/lead before running against an environment with real data.
+- **Don't merge into the integration branch until the gates pass:** quality + security checks
+  (static analysis, secret scanning, dependency audit, code scanning).
+- Don't self-merge PRs into protected/promotion branches (a human gate — reviewer/lead).
+  Don't commit secrets.

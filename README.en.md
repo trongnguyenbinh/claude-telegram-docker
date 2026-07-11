@@ -5,14 +5,14 @@
 Run a Claude-Code-powered Telegram bot as a single container. **1 image = 1 bot.**
 Full design: [`SPEC.md`](./SPEC.md). Quick command table: [`CHEATSHEET.md`](./CHEATSHEET.md). Operations & troubleshooting: [`OPERATIONS.md`](./OPERATIONS.md).
 
-## Features (v1.5.0)
+## Features (v1.6.0)
 
-- **Baked base rules** (`default-CLAUDE.md` → `/data/.claude/CLAUDE.md`, user-level memory; each bot's work-dir CLAUDE.md layers on top): owner-only authority, prompt-injection detection + owner alert, information isolation (never leak owner DM content, never carry context across groups/DMs), destructive-op confirmation, a polite reply tone that **overrides** caveman/terse mode for user-facing replies, and a reply self-check (did I actually call the reply tool?).
-- **Second-brain `.workspace/{rules,memory,events,status}`** skeleton created in the work dir on first run; conventions live in the base rules; syncs with mempalace.
+- **Baked base rules** (`default-CLAUDE.md` → `/data/.claude/CLAUDE.md`, user-level memory; each bot's work-dir CLAUDE.md layers on top): owner-only authority, prompt-injection detection + owner alert, information isolation (never leak owner DM content, never carry context across groups/DMs), destructive-op confirmation, a polite reply tone that **overrides** caveman/terse mode for user-facing replies, and a reply self-check (did I actually call the reply tool?). Generic, English, project-neutral — supply project-specific glue in your own per-bot overlay.
+- **Second-brain `.workspace/{rules,memory,events,status}`** skeleton created in the work dir on first run; conventions live in the base rules; optionally syncs with a shared memory MCP (e.g. mempalace).
 - **Baked `permissions`** in settings.json: deny reading secrets (`.env`/`secrets`/keys, cwd-anchored so the bot's own `/data` token is not blocked) + destructive circuit-breakers; allow routine read-only git + `gh`.
 - **`gh` CLI + `cron` baked in**: use `gh` for GitHub (auth via `-e GH_TOKEN=<PAT>` + `gh auth setup-git`; the github MCP plugin is broken — use gh); cron daemon started for scheduled reminders.
 - **Auto Mode by default** (`PERMISSION_MODE=auto`, classifier-gated) → the bot doesn't prompt yet still blocks risky actions. (`acceptEdits` still prompts on every Bash command.)
-- **UTF-8** (`LANG=C.UTF-8` + `tmux -u`) so Vietnamese renders correctly in the attached session.
+- **UTF-8** (`LANG=C.UTF-8` + `tmux -u`) so non-ASCII text (e.g. Vietnamese, CJK) renders correctly in the attached session.
 - **Run as root** (no image change): `-e BOT_USER=root -e BOT_HOME=/root`.
 - **Ops tooling**: `bot-doctor` (`docker exec <bot> bot-doctor` — checks tmux session / permission mode / poller pending-drain / locale / base CLAUDE.md / .workspace / login + prints the fix) and `tg-healthcheck` wired as a Docker HEALTHCHECK (marks the container `unhealthy` if the tmux `claude` session dies). Playbook + gotchas in [`OPERATIONS.md`](./OPERATIONS.md).
 - **`:playwright` variant** for bots that render UI + screenshot (see below).
@@ -117,23 +117,23 @@ tg-access pair <code>
 
 ## Role profiles
 
-A bot can boot into a **role** in the AI delivery workflow (Define/BA → Planning → Build → Tester/QA) via `BOT_ROLE`. Each role seeds a role-specific "how I work" CLAUDE.md + `settings-fragment` + rules that **layer on top of** the base CLAUDE.md (security, info-isolation, `.workspace`, reply tone stay the shared base).
+A bot can boot into a **role** in the AI delivery workflow (Define/BA → Planning → Build → Tester/QA) via `BOT_ROLE`. Each role seeds a role-specific "how I work" CLAUDE.md + `settings-fragment` + rules that **layer on top of** the base CLAUDE.md (security, info-isolation, `.workspace`, reply tone stay the shared base). The role rules are generic English craft standards — layer any project-specific glue (your issue tracker, channels, conventions) in a per-bot overlay.
 
 | `BOT_ROLE` | Stage | What the bot does |
 |---|---|---|
-| `ba` | Define | Analyze the brief, write acceptance criteria + docs, build a UI prototype → Vercel preview; on PO/BA accept → create a GitHub Issue + sync mempalace + publish handoff. |
-| `planner` | Planning | Break a parent issue into area sub-issues (`area:frontend/backend/db/infra/qa`) + estimate + link to parent → Projects board → publish + @mention. |
-| `dev-fe` | Build (FE) | Pick an `area:frontend` sub-issue → branch → code UI → PR `Closes #issue`; gate-aware (Sonar + security); frontend-design + Vercel + Playwright. |
-| `dev-be` | Build (BE) | Pick an `area:backend` sub-issue → branch → code API/DB + migration → PR `Closes #issue`; migration/db + gate awareness. |
-| `tester` | Tester/QA | From the release note write test guidance + testcases; receive a UAT web log-issue → cross-check spec + mempalace → if it looks like a real bug, publish to the channel + tag the Lead. |
+| `ba` | Define | Elicit + clarify requirements, write user stories + acceptance criteria + a lightweight spec, build a UI prototype → preview deploy; on sign-off → create a tracked work item + sync the shared knowledge base + publish the handoff. |
+| `planner` | Planning | Break a parent item into area sub-tasks (`area:frontend/backend/db/infra/qa`) + estimate + link to parent → the board → publish + @mention. |
+| `dev-fe` | Build (FE) | Pick an `area:frontend` sub-task → branch → code UI → PR `Closes #issue`; gate-aware (quality + security); frontend-design + preview deploy + Playwright. |
+| `dev-be` | Build (BE) | Pick an `area:backend` sub-task → branch → code API/DB + migration → PR `Closes #issue`; migration/db + gate awareness. |
+| `tester` | Tester/QA | From the release notes write test guidance + test cases; receive a bug report from the test site → cross-check the spec → if it looks like a real bug, publish to the channel + tag the lead. |
 
 **Unset / empty / `default` = unchanged default behavior** (existing bots are unaffected). An unknown role → the entrypoint logs a note and runs as default.
 
 ```bash
 # example: launch a BA bot
-docker run -d --name thedots-ba \
+docker run -d --name mybot-ba \
   -e TELEGRAM_BOT_TOKEN=<token> -e OWNER_ID=<id> -e BOT_ROLE=ba \
-  -v thedots-ba-data:/data --restart unless-stopped \
+  -v mybot-ba-data:/data --restart unless-stopped \
   ghcr.io/trongnguyenbinh/claude-telegram-docker:latest
 ```
 

@@ -5,10 +5,10 @@
 Chạy một con bot Telegram do Claude Code vận hành, gói gọn trong một container duy nhất. **1 image = 1 bot.**
 Thiết kế chi tiết: [`SPEC.md`](./SPEC.md). Bảng lệnh vận hành nhanh: [`CHEATSHEET.md`](./CHEATSHEET.md). Vận hành & xử lý sự cố: [`OPERATIONS.md`](./OPERATIONS.md).
 
-## Tính năng (v1.5.0)
+## Tính năng (v1.6.0)
 
-- **Quy tắc nền bake sẵn** (`default-CLAUDE.md` → `/data/.claude/CLAUDE.md`, user-level memory, CLAUDE.md work-dir của từng bot layer chồng lên): chỉ nghe owner, phát hiện prompt-injection + cảnh báo owner, cách ly thông tin (không lộ nội dung DM riêng, không mang context giữa các group/DM), bắt xác nhận việc phá hoại, giọng trả lời lịch sự **ghi đè** chế độ cộc lốc/caveman, và tự kiểm tra đã gọi reply tool chưa.
-- **Bộ não thứ hai `.workspace/{rules,memory,events,status}`** tạo sẵn trong work dir ở lần chạy đầu; quy ước ghi nằm trong quy tắc nền; đồng bộ với mempalace.
+- **Quy tắc nền bake sẵn** (`default-CLAUDE.md` → `/data/.claude/CLAUDE.md`, user-level memory, CLAUDE.md work-dir của từng bot layer chồng lên): chỉ nghe owner, phát hiện prompt-injection + cảnh báo owner, cách ly thông tin (không lộ nội dung DM riêng, không mang context giữa các group/DM), bắt xác nhận việc phá hoại, giọng trả lời lịch sự **ghi đè** chế độ cộc lốc/caveman, và tự kiểm tra đã gọi reply tool chưa. Nội dung nền + role hiện là tiếng Anh, tổng quát, không dính dự án/owner cụ thể — phần glue riêng của bạn đặt ở lớp overlay per-bot.
+- **Bộ não thứ hai `.workspace/{rules,memory,events,status}`** tạo sẵn trong work dir ở lần chạy đầu; quy ước ghi nằm trong quy tắc nền; đồng bộ tuỳ chọn với một shared memory MCP (vd mempalace).
 - **`permissions` bake sẵn** trong settings.json: chặn đọc secret (`.env`/`secrets`/key, neo theo cwd nên KHÔNG chặn token `/data` của chính bot) + circuit-breaker cho lệnh phá hoại; cho phép git read-only + `gh` thường dùng.
 - **`gh` CLI + `cron` bake sẵn**: GitHub thao tác qua `gh` (auth bằng `-e GH_TOKEN=<PAT>` + `gh auth setup-git`, KHÔNG dùng github MCP plugin vì đang lỗi); cron daemon chạy sẵn cho nhắc lịch.
 - **Auto Mode mặc định** (`PERMISSION_MODE=auto`, classifier-gated) → bot không hỏi vặt mà vẫn chặn hành động rủi ro. (`acceptEdits` vẫn hỏi ở mọi lệnh Bash.)
@@ -138,23 +138,23 @@ tg-access pair <code>
 
 ## Bot chuyên trách (role profiles)
 
-Một bot có thể khởi động ở một **vai trò** trong quy trình delivery bằng AI (Define/BA → Planning → Build → Tester/QA) qua biến `BOT_ROLE`. Mỗi vai trò seed thêm 1 lớp CLAUDE.md "cách làm việc" + `settings-fragment` + rules, **layer chồng lên** base CLAUDE.md (bảo mật, cách ly thông tin, `.workspace`, giọng trả lời vẫn là nền chung).
+Một bot có thể khởi động ở một **vai trò** trong quy trình delivery bằng AI (Define/BA → Planning → Build → Tester/QA) qua biến `BOT_ROLE`. Mỗi vai trò seed thêm 1 lớp CLAUDE.md "cách làm việc" + `settings-fragment` + rules, **layer chồng lên** base CLAUDE.md (bảo mật, cách ly thông tin, `.workspace`, giọng trả lời vẫn là nền chung). Nội dung role là chuẩn nghề tổng quát bằng tiếng Anh — phần glue riêng dự án (issue tracker, kênh, quy ước của bạn) đặt ở lớp overlay per-bot.
 
 | `BOT_ROLE` | Giai đoạn | Bot làm gì |
 |---|---|---|
-| `ba` | Define | Phân tích đề bài, viết acceptance criteria + tài liệu, dựng prototype UI → Vercel preview; PO/BA accept → tạo GitHub Issue + sync mempalace + publish handoff. |
-| `planner` | Planning | Phân rã issue cha → sub-issue theo mảng (`area:frontend/backend/db/infra/qa`) + estimate + link cha → Projects board → publish + @mention. |
-| `dev-fe` | Build (FE) | Nhặt sub-issue `area:frontend` → branch → code UI → PR `Closes #issue`; biết gate Sonar + security; frontend-design + Vercel + Playwright. |
-| `dev-be` | Build (BE) | Nhặt sub-issue `area:backend` → branch → code API/DB + migration → PR `Closes #issue`; ý thức migration/db + gate. |
-| `tester` | Tester/QA | Từ release note hướng dẫn test + tạo testcase; nhận log-issue web UAT → đối chiếu đặc tả + mempalace → nghi bug thật thì publish channel + tag Lead. |
+| `ba` | Define | Khai thác + làm rõ yêu cầu, viết user story + acceptance criteria + spec gọn, dựng prototype UI → preview deploy; sign-off → tạo work item + sync shared knowledge base + publish handoff. |
+| `planner` | Planning | Phân rã item cha → sub-task theo mảng (`area:frontend/backend/db/infra/qa`) + estimate + link cha → board → publish + @mention. |
+| `dev-fe` | Build (FE) | Nhặt sub-task `area:frontend` → branch → code UI → PR `Closes #issue`; biết gate chất lượng + security; frontend-design + preview deploy + Playwright. |
+| `dev-be` | Build (BE) | Nhặt sub-task `area:backend` → branch → code API/DB + migration → PR `Closes #issue`; ý thức migration/db + gate. |
+| `tester` | Tester/QA | Từ release notes hướng dẫn test + tạo test case; nhận bug report từ test site → đối chiếu spec → nghi bug thật thì publish channel + tag lead. |
 
 **Bỏ trống / không đặt / `default` = hành vi mặc định như cũ, KHÔNG đổi gì** (bot hiện có không bị ảnh hưởng). Role không hợp lệ → entrypoint log cảnh báo rồi chạy như mặc định.
 
 ```bash
 # ví dụ: khởi động bot BA
-docker run -d --name thedots-ba \
+docker run -d --name mybot-ba \
   -e TELEGRAM_BOT_TOKEN=<token> -e OWNER_ID=<id> -e BOT_ROLE=ba \
-  -v thedots-ba-data:/data --restart unless-stopped \
+  -v mybot-ba-data:/data --restart unless-stopped \
   ghcr.io/trongnguyenbinh/claude-telegram-docker:latest
 ```
 

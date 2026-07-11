@@ -1,5 +1,5 @@
 {
-  "_note": "Vai trò Dev Backend: code API/DB + migration; không cần plugin FE. gh bake sẵn. Cho phép thêm vài lệnh git thường dùng khi cặp code để bớt hỏi vặt. Không nới quyền cho migration phá huỷ: những lệnh đó vẫn phải qua xác nhận owner/Lead.",
+  "_note": "Dev Backend role: code API/DB + migrations; no FE plugin needed. gh is baked. Allows a few common git commands during pair-coding to cut down on prompts. Does not widen permissions for destructive migrations: those still require owner/lead confirmation.",
   "enabledPlugins": {},
   "permissions": {
     "allow": [

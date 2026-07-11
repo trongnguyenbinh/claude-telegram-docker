@@ -52,7 +52,7 @@ fi
 # 1d) Create the .workspace second-brain skeleton in the work dir (first run only).
 if [ ! -d "$WORK_DIR/.workspace" ]; then
   mkdir -p "$WORK_DIR/.workspace"/{rules,memory,events,status}
-  printf '# MEMORY.md — index bộ nhớ bền của bot\n\nMỗi dòng trỏ tới 1 file trong memory/. Đọc đầu mỗi phiên để bắt nhịp.\n' > "$WORK_DIR/.workspace/memory/MEMORY.md"
+  printf '# MEMORY.md — index of the bot durable memory\n\nEach line points to one file in memory/. Read it at the start of every session to get back in sync.\n' > "$WORK_DIR/.workspace/memory/MEMORY.md"
   echo "[entrypoint] created .workspace/{rules,memory,events,status} skeleton"
 fi
 
@@ -161,7 +161,7 @@ chown "$BOT_USER":"$BOT_USER" "$BOT_HOME/.claude.json" 2>/dev/null || true
 #    ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN env vars still work as a fallback.
 if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   if ! gosu "$BOT_USER" env HOME="$BOT_HOME" claude auth status >/dev/null 2>&1; then
-    echo "[entrypoint] NOTE: chưa đăng nhập → chạy:  docker exec -it -u botuser <name> claude auth login"
+    echo "[entrypoint] NOTE: not logged in → run:  docker exec -it -u botuser <name> claude auth login"
   fi
 fi
 

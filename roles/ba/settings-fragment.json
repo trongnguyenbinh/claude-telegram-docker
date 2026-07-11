@@ -1,5 +1,5 @@
 {
-  "_note": "Vai trò BA/Define: dựng prototype UI + deploy Vercel preview + soi bằng Playwright. frontend-design đã bake sẵn ở base; liệt kê lại cho chắc. Vercel + Playwright KHÔNG bake trong image base: cắm Vercel MCP/skill khi cần, Playwright cần image :playwright rồi `claude mcp add playwright -- playwright-mcp --headless`.",
+  "_note": "BA/Define role: build a UI prototype + deploy a preview + inspect with Playwright. frontend-design is already baked in the base; listed again to be explicit. Vercel + Playwright are NOT baked in the base image: enable a preview-deploy MCP/skill when needed, and Playwright needs the :playwright image plus `claude mcp add playwright -- playwright-mcp --headless`.",
   "enabledPlugins": {
     "frontend-design@claude-plugins-official": true
   },

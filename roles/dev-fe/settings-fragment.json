@@ -1,5 +1,5 @@
 {
-  "_note": "Vai trò Dev Frontend: code UI (frontend-design bake sẵn) + Vercel preview + Playwright smoke test. Playwright cần image :playwright rồi `claude mcp add playwright -- playwright-mcp --headless`. Cho phép thêm vài lệnh git thường dùng khi cặp code để bớt hỏi vặt.",
+  "_note": "Dev Frontend role: code UI (frontend-design baked) + preview deploy + Playwright smoke test. Playwright needs the :playwright image plus `claude mcp add playwright -- playwright-mcp --headless`. Allows a few common git commands during pair-coding to cut down on prompts.",
   "enabledPlugins": {
     "frontend-design@claude-plugins-official": true
   },

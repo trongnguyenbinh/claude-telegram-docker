@@ -1,27 +1,29 @@
-# OPERATIONS — vận hành & xử lý sự cố bot
+# OPERATIONS — running & troubleshooting bots
 
-Ghi chú vận hành + các "gotcha" đã gặp thực tế. Công cụ đi kèm baked trong image:
-`bot-doctor` (chẩn đoán) và `tg-healthcheck` (Docker HEALTHCHECK liveness).
+Operational notes + real-world "gotchas". Tooling baked into the image:
+`bot-doctor` (diagnostics) and `tg-healthcheck` (Docker HEALTHCHECK liveness).
 
-## Chẩn đoán nhanh
+## Quick diagnosis
 
 ```bash
-docker exec <container> bot-doctor        # chạy hết các bước check + gợi ý fix
-docker ps                                 # cột STATUS: healthy / unhealthy (HEALTHCHECK)
-docker exec -u botuser <container> tmux attach -t claude   # xem session (thoát: Ctrl+B rồi D)
+docker exec <container> bot-doctor        # runs all checks + suggests fixes
+docker ps                                 # STATUS column: healthy / unhealthy (HEALTHCHECK)
+docker exec -u botuser <container> tmux attach -t claude   # view the session (detach: Ctrl+B then D)
 ```
 
-## Recreate / update an toàn (giữ state)
+## Safe recreate / update (keeping state)
 
-State BỀN nằm ở volume (`/data`, `/working-directory`) + mempalace (remote) → recreate KHÔNG mất.
-Chỉ mất "bộ nhớ ngắn hạn" của phiên đang chạy (context RAM); transcript vẫn lưu ở
-`/data/.claude/projects/*.jsonl` trên volume.
+Durable state lives on the volumes (`/data`, `/working-directory`) + the shared memory
+server (remote, if configured) → a recreate does NOT lose it. You only lose the "short-term
+memory" of the running session (RAM context); the transcript is still stored at
+`/data/.claude/projects/*.jsonl` on the volume.
 
-Quy trình:
+Procedure:
 
-1. **Checkpoint mempalace trước** (nếu muốn chắc): chạy 1 lượt cho bot đẩy state bền lên mempalace.
-2. **Env-preserving recreate**: copy toàn bộ env từ container cũ, chỉ override cái cần
-   (thường `PERMISSION_MODE=auto`), giữ nguyên volumes:
+1. **Checkpoint the shared memory first** (if you want to be sure): run one turn so the bot
+   pushes durable state to its shared memory server.
+2. **Env-preserving recreate**: copy every env var from the old container, override only what
+   you need (usually `PERMISSION_MODE=auto`), keep the volumes:
    ```bash
    C=<container>; IMG=ghcr.io/<owner>/claude-telegram-docker:latest
    docker logout ghcr.io; docker pull "$IMG"
@@ -30,38 +32,47 @@ Quy trình:
    VOLARGS=(); while IFS= read -r m; do [ -n "$m" ] && VOLARGS+=( -v "$m" ); done < <(docker inspect "$C" --format '{{range .Mounts}}{{.Name}}:{{.Destination}}{{println}}{{end}}')
    docker rm -f "$C"; docker run -dt --name "$C" --restart unless-stopped "${ENVARGS[@]}" "${VOLARGS[@]}" "$IMG"
    ```
-3. **Verify pending drain**: sau recreate, `bot-doctor` hoặc poll `getWebhookInfo` vài lần —
-   `pending_update_count` phải về 0.
+3. **Verify the pending drain**: after recreate, run `bot-doctor` or poll `getWebhookInfo` a
+   few times — `pending_update_count` must reach 0.
 
-## Gotchas đã gặp
+## Gotchas seen in practice
 
-- **Poller kẹt sau recreate** — container Up, session sống, auto mode on, NHƯNG
-  `pending_update_count` > 0 và không drain (1 tin kẹt trong ô nhập chặn poll tiếp) → bot như chết.
-  **Fix:** `docker restart <container>` (1 phát là thông). `bot-doctor` phát hiện được ca này.
-  **Tự lành (v1.3.1+):** `tg-watchdog` chạy qua cron mỗi phút — nếu pending kẹt 2 nhịp liền + session đang rảnh, nó tự `tmux send-keys Enter` submit tin kẹt → poller thông lại, thường khỏi cần restart tay. Log: `/tmp/tg-watchdog.log` trong container.
-- **Bắt accept liên tục** — bot chạy `PERMISSION_MODE=acceptEdits` (chỉ auto file-edit, VẪN hỏi
-  mọi lệnh Bash/network). Muốn không hỏi vặt → `PERMISSION_MODE=auto`. Toggle shift+tab trong
-  session KHÔNG bền qua restart; phải set ở env → recreate.
-- **Chạy dưới root** — không cần feature riêng: `-e BOT_USER=root -e BOT_HOME=/root` (entrypoint
-  `gosu $BOT_USER`).
-- **Bot chuyên trách (`BOT_ROLE`)** — đặt `-e BOT_ROLE=<ba|planner|dev-fe|dev-be|tester>` lúc
-  `docker run`/recreate. Lần chạy đầu entrypoint seed CLAUDE.md của vai trò vào work-dir CLAUDE.md
-  (`$WORK_DIR/CLAUDE.md`) + jq-merge `settings-fragment.json` (union enabledPlugins + permissions.allow)
-  + seed `rules/` vào `.workspace/rules/`. **CLAUDE.md chỉ seed khi work-dir CHƯA có CLAUDE.md** — đổi
-  `BOT_ROLE` trên bot đã chạy (đã có work-dir CLAUDE.md) sẽ KHÔNG tự thay CLAUDE.md; muốn đổi thật thì
-  xoá/đổi tên `$WORK_DIR/CLAUDE.md` rồi restart, hoặc volume sạch. Phần settings-merge là union nên
-  chạy lại vô hại. Bỏ trống / `default` / role không tồn tại = hành vi mặc định như cũ (log 1 dòng note),
-  bot cũ KHÔNG bị ảnh hưởng. Chi tiết: `roles/README.md`.
-- **Tiếng Việt vỡ trong tmux** — thiếu locale UTF-8 (debian-slim mặc định C). Image đã đặt
-  `LANG=C.UTF-8` + `tmux -u`. Bot cũ: recreate từ image mới.
-- **GitHub trong bot** — dùng `gh` (đã baked), auth `-e GH_TOKEN=<PAT>` + `gh auth setup-git`.
-  KHÔNG dùng github MCP plugin (bug HTTP 400).
-- **Docker exec bot chạy botuser** phải `-u botuser` (tmux socket theo user); bot chạy root thì exec mặc định (root).
-- **permissions block** trong staged settings.json chỉ áp cho volume MỚI; bot cũ phải merge
-  tay vào `/data/.claude/settings.json` rồi restart.
+- **Poller stuck after a recreate** — container Up, session alive, auto mode on, BUT
+  `pending_update_count` > 0 and not draining (one message stuck in the input box blocks
+  further polling) → the bot looks dead.
+  **Fix:** `docker restart <container>` (usually one shot). `bot-doctor` detects this case.
+  **Self-heals (v1.3.1+):** `tg-watchdog` runs via cron every minute — if pending is stuck
+  for 2 ticks in a row while the session is idle, it `tmux send-keys Enter` to submit the
+  stuck message → the poller flows again, usually without a manual restart. Log:
+  `/tmp/tg-watchdog.log` inside the container.
+- **Constant accept prompts** — the bot is on `PERMISSION_MODE=acceptEdits` (auto-approves
+  file edits only, STILL prompts on every Bash/network command). To stop the prompts →
+  `PERMISSION_MODE=auto`. Toggling shift+tab in the session does NOT persist across a restart;
+  set it in env → recreate.
+- **Running as root** — no special feature needed: `-e BOT_USER=root -e BOT_HOME=/root`
+  (the entrypoint does `gosu $BOT_USER`).
+- **Specialized bots (`BOT_ROLE`)** — set `-e BOT_ROLE=<ba|planner|dev-fe|dev-be|tester>` at
+  `docker run`/recreate. On first run the entrypoint seeds the role's CLAUDE.md into the
+  work-dir CLAUDE.md (`$WORK_DIR/CLAUDE.md`) + jq-merges `settings-fragment.json` (union of
+  enabledPlugins + permissions.allow) + seeds `rules/` into `.workspace/rules/`. **CLAUDE.md
+  is only seeded when the work dir has no CLAUDE.md** — changing `BOT_ROLE` on an
+  already-running bot (one that already has a work-dir CLAUDE.md) will NOT swap the CLAUDE.md;
+  to really change it, delete/rename `$WORK_DIR/CLAUDE.md` and restart, or use a clean volume.
+  The settings-merge is a union, so re-running is harmless. Unset / `default` / a non-existent
+  role = default behavior (one note line logged), existing bots are NOT affected. Details:
+  `roles/README.md`.
+- **Non-ASCII text broken in tmux** — missing UTF-8 locale (debian-slim defaults to C). The
+  image sets `LANG=C.UTF-8` + `tmux -u`. Old bots: recreate from the new image.
+- **GitHub inside the bot** — use `gh` (baked), auth via `-e GH_TOKEN=<PAT>` +
+  `gh auth setup-git`. Do NOT use the github MCP plugin (HTTP 400 bug).
+- **Docker exec on a botuser bot** must use `-u botuser` (the tmux socket is per-user); a bot
+  running as root uses the default exec (root).
+- **The permissions block** in the staged settings.json only applies to FRESH volumes; old
+  bots must merge it into `/data/.claude/settings.json` by hand, then restart.
 
 ## HEALTHCHECK
 
-`tg-healthcheck` (Docker HEALTHCHECK) chỉ kiểm tra LIVENESS (session còn sống) → bắt crash/exit,
-KHÔNG bắt poller-stall (session vẫn sống). Ghép một watchdog `autoheal` để tự restart container
-`unhealthy`. Poller-stall: dùng `bot-doctor`.
+`tg-healthcheck` (Docker HEALTHCHECK) only checks LIVENESS (the session is still alive) → it
+catches a crash/exit, NOT a poller stall (the session is still alive). Pair it with an
+`autoheal`-style watchdog to auto-restart an `unhealthy` container. For poller stalls: use
+`bot-doctor`.

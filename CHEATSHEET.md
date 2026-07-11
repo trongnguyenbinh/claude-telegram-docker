@@ -1,116 +1,117 @@
-# Cheat Sheet — Vận hành bot
+# Cheat Sheet — Operating a bot
 
-Thay `<bot>` = tên container (vd `claude-tg-bot-qc`). **Hầu hết lệnh cần `-u botuser`** (bot chạy non-root; chạy bằng root thì access.json/creds không ăn).
+Replace `<bot>` with the container name (e.g. `claude-tg-bot-qc`). **Most commands need
+`-u botuser`** (the bot runs non-root; running as root means `access.json`/creds don't take).
 
 ## Container
 
-| Việc | Lệnh |
+| Task | Command |
 |---|---|
-| Trạng thái | `docker ps --format "{{.Names}} {{.Status}}"` |
+| Status | `docker ps --format "{{.Names}} {{.Status}}"` |
 | Logs | `docker logs --tail 40 <bot>` |
-| Restart (giữ mọi thứ) | `docker restart <bot>` |
-| Recreate (đổi env, GIỮ volume) | `docker rm -f <bot> && docker run -d --name <bot> -it --restart unless-stopped -e ... -v <bot>-data:/data -v <bot>-work:/working-directory <image>` |
-| Chạy bot mới | như trên với volume + token mới |
-| Chạy bot chuyên trách (role) | thêm `-e BOT_ROLE=<ba\|planner\|dev-fe\|dev-be\|tester>` vào `docker run` — seed CLAUDE.md + settings + rules của vai trò (lần đầu). Bỏ trống = mặc định như cũ. Xem `roles/README.md` |
+| Restart (keep everything) | `docker restart <bot>` |
+| Recreate (change env, KEEP volumes) | `docker rm -f <bot> && docker run -d --name <bot> -it --restart unless-stopped -e ... -v <bot>-data:/data -v <bot>-work:/working-directory <image>` |
+| Run a new bot | as above with a new volume + token |
+| Run a specialized (role) bot | add `-e BOT_ROLE=<ba\|planner\|dev-fe\|dev-be\|tester>` to `docker run` — seeds the role's CLAUDE.md + settings + rules (first run). Unset = default behavior. See `roles/README.md` |
 
-## Đăng nhập / Auth
+## Login / Auth
 
-| Việc | Lệnh / Ghi chú |
+| Task | Command / Note |
 |---|---|
-| Login tương tác | `docker exec -it -u botuser <bot> claude auth login` (mở URL, authorize; creds lưu volume, có thể HẾT HẠN) |
-| Tạo token dài hạn | `docker exec -it -u botuser <bot> claude setup-token` → in URL → authorize → **dán code (`xxx#yyy`) NGƯỢC vào prompt** → nó in `sk-ant-oat01-...` |
-| Dùng token dài hạn | Recreate với `-e CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...` **và** xoá creds cũ (dưới) |
-| Kiểm tra | `docker exec -u botuser <bot> claude auth status` ⚠️ báo `loggedIn:true` cả khi token đã hết hạn |
-| Ép dùng env token | `docker exec -u botuser <bot> mv /data/.claude/.credentials.json /data/.claude/.credentials.json.bak` rồi restart (file creds ĐÈ env token) |
+| Interactive login | `docker exec -it -u botuser <bot> claude auth login` (opens a URL, authorize; creds stored on the volume, can EXPIRE) |
+| Create a long-lived token | `docker exec -it -u botuser <bot> claude setup-token` → prints a URL → authorize → **paste the code (`xxx#yyy`) BACK into the prompt** → it prints `sk-ant-oat01-...` |
+| Use the long-lived token | recreate with `-e CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...` **and** delete the old creds (below) |
+| Check | `docker exec -u botuser <bot> claude auth status` ⚠️ reports `loggedIn:true` even when the token has expired |
+| Force the env token | `docker exec -u botuser <bot> mv /data/.claude/.credentials.json /data/.claude/.credentials.json.bak` then restart (the creds file overrides the env token) |
 
-> `sk-ant-oat...` = OAuth token (thứ CLAUDE_CODE_OAUTH_TOKEN cần), KHÔNG phải API key (`sk-ant-api-...`).
+> `sk-ant-oat...` = an OAuth token (what `CLAUDE_CODE_OAUTH_TOKEN` needs), NOT an API key (`sk-ant-api-...`).
 
-## Chẩn đoán (bot-doctor)
+## Diagnostics (bot-doctor)
 
-| Việc | Lệnh |
+| Task | Command |
 |---|---|
-| Chẩn đoán toàn diện | `docker exec <bot> bot-doctor` (check tmux/permission/poller/locale/base CLAUDE.md/.workspace/login + in fix) |
-| Trạng thái healthy | `docker ps` — cột STATUS: `healthy`/`unhealthy` (HEALTHCHECK = tg-healthcheck) |
-| Poller kẹt (pending không về 0) | `docker restart <bot>` (1 phát là thông) |
+| Full diagnosis | `docker exec <bot> bot-doctor` (checks tmux/permission/poller/locale/base CLAUDE.md/.workspace/login + prints the fix) |
+| Health status | `docker ps` — STATUS column: `healthy`/`unhealthy` (HEALTHCHECK = tg-healthcheck) |
+| Poller stuck (pending won't reach 0) | `docker restart <bot>` (usually one shot) |
 
-## Chạy bot dưới root
+## Running a bot as root
 
-| Việc | Lệnh |
+| Task | Command |
 |---|---|
-| Recreate chạy root | thêm `-e BOT_USER=root -e BOT_HOME=/root` vào `docker run` (exec khỏi cần `-u botuser`) |
+| Recreate as root | add `-e BOT_USER=root -e BOT_HOME=/root` to `docker run` (exec then needs no `-u botuser`) |
 
-## Xem bot chạy (monitor)
+## Monitoring the bot
 
-| Việc | Lệnh |
+| Task | Command |
 |---|---|
-| Attach TUI live | `docker exec -it -u botuser <bot> tmux attach -t claude` |
-| Thoát an toàn | **Ctrl+B rồi D** (ĐỪNG Ctrl+C — giết bot) |
+| Attach the live TUI | `docker exec -it -u botuser <bot> tmux attach -t claude` |
+| Detach safely | **Ctrl+B then D** (do NOT Ctrl+C — it kills the bot) |
 | Transcript | `docker exec <bot> sh -c 'tail -f /data/.claude/projects/*/*.jsonl'` |
 
 ## Permission mode
 
-| Việc | Lệnh / Ghi chú |
+| Task | Command / Note |
 |---|---|
-| Đổi trong TUI | nhấn **Shift+Tab** (xoay: accept edits → plan → bypass...) |
-| Set qua env | mặc định `auto` (classifier-gated, khuyên dùng — headless không treo). Override: `-e PERMISSION_MODE=acceptEdits` |
-| bypassPermissions | bắt xác nhận hộp thoại "Yes, I accept" mỗi lần → headless TREO; attach tmux → ↓ chọn Yes → Enter |
+| Change in the TUI | press **Shift+Tab** (cycles: accept edits → plan → bypass …) |
+| Set via env | default `auto` (classifier-gated, recommended — headless won't hang). Override: `-e PERMISSION_MODE=acceptEdits` |
+| bypassPermissions | prompts a "Yes, I accept" dialog every time → headless HANGS; attach tmux → ↓ pick Yes → Enter |
 
-## Quản trị truy cập (LUÔN `-u botuser`)
+## Access management (ALWAYS `-u botuser`)
 
-| Việc | Lệnh |
+| Task | Command |
 |---|---|
-| Trạng thái | `docker exec -u botuser <bot> tg-access status` |
-| Chế độ allowlist | `docker exec -u botuser <bot> tg-access policy allowlist` |
-| Cho phép user | `docker exec -u botuser <bot> tg-access allow <userId>` |
-| Thêm group | `docker exec -u botuser <bot> tg-access group add <groupId>` |
-| Gỡ group | `docker exec -u botuser <bot> tg-access group rm <groupId>` |
+| Status | `docker exec -u botuser <bot> tg-access status` |
+| Allowlist mode | `docker exec -u botuser <bot> tg-access policy allowlist` |
+| Allow a user | `docker exec -u botuser <bot> tg-access allow <userId>` |
+| Add a group | `docker exec -u botuser <bot> tg-access group add <groupId>` |
+| Remove a group | `docker exec -u botuser <bot> tg-access group rm <groupId>` |
 
 ## Plugins
 
-| Việc | Lệnh |
+| Task | Command |
 |---|---|
-| Liệt kê | `docker exec -u botuser <bot> sh -c 'cat /data/.claude/plugins/installed_plugins.json \| jq -r ".plugins\|keys[]"'` |
-| Thêm marketplace | `docker exec -u botuser <bot> claude plugin marketplace add <git-url>` |
-| Cài plugin | `docker exec -u botuser <bot> claude plugin install <name>@<marketplace>` |
-| Gỡ | `docker exec -u botuser <bot> claude plugin uninstall <name>@<marketplace>` |
+| List | `docker exec -u botuser <bot> sh -c 'cat /data/.claude/plugins/installed_plugins.json \| jq -r ".plugins\|keys[]"'` |
+| Add a marketplace | `docker exec -u botuser <bot> claude plugin marketplace add <git-url>` |
+| Install a plugin | `docker exec -u botuser <bot> claude plugin install <name>@<marketplace>` |
+| Remove | `docker exec -u botuser <bot> claude plugin uninstall <name>@<marketplace>` |
 
-## MCP (vd mempalace)
+## MCP (e.g. a shared memory server)
 
-| Việc | Lệnh |
+| Task | Command |
 |---|---|
-| Liệt kê + trạng thái | `docker exec -u botuser <bot> claude mcp list` |
-| Cắm mempalace | `docker exec -u botuser <bot> claude mcp add --scope user --transport http mempalace https://<domain>/mcp --header "Authorization: Bearer <token>"` rồi `docker restart <bot>` |
-| Cắm Playwright (image `:playwright`) | `docker exec -u botuser <bot> claude mcp add --scope user playwright -- playwright-mcp --headless` rồi `docker restart <bot>` — dùng binary bake, KHÔNG `npx @playwright/mcp@latest` |
+| List + status | `docker exec -u botuser <bot> claude mcp list` |
+| Add an HTTP MCP (e.g. mempalace) | `docker exec -u botuser <bot> claude mcp add --scope user --transport http mempalace https://<domain>/mcp --header "Authorization: Bearer <token>"` then `docker restart <bot>` |
+| Add Playwright (image `:playwright`) | `docker exec -u botuser <bot> claude mcp add --scope user playwright -- playwright-mcp --headless` then `docker restart <bot>` — use the baked binary, NOT `npx @playwright/mcp@latest` |
 
-## GitHub trong bot (gh)
+## GitHub inside the bot (gh)
 
-| Việc | Lệnh / Ghi chú |
+| Task | Command / Note |
 |---|---|
-| Auth gh | recreate với `-e GH_TOKEN=<PAT>` rồi `docker exec -u botuser <bot> gh auth setup-git` |
-| Kiểm tra | `docker exec -u botuser <bot> gh auth status` |
-| Lưu ý | dùng `gh` (đã bake), KHÔNG dùng github MCP plugin (đang lỗi HTTP 400) |
+| Auth gh | recreate with `-e GH_TOKEN=<PAT>` then `docker exec -u botuser <bot> gh auth setup-git` |
+| Check | `docker exec -u botuser <bot> gh auth status` |
+| Note | use `gh` (baked), NOT the github MCP plugin (currently broken, HTTP 400) |
 
 ## Update Claude Code
 
-| Việc | Lệnh |
+| Task | Command |
 |---|---|
 | Version | `docker exec -u botuser <bot> claude --version` |
-| Update trong container | `docker exec -u botuser <bot> claude update && docker restart <bot>` |
-| Update theo image | build lại image (Dockerfile tự lấy bản mới) → `docker pull <image>` → recreate |
+| Update in the container | `docker exec -u botuser <bot> claude update && docker restart <bot>` |
+| Update via the image | rebuild the image (the Dockerfile fetches the latest) → `docker pull <image>` → recreate |
 
 ## Troubleshooting
 
-| Triệu chứng | Nguyên nhân / Fix |
+| Symptom | Cause / Fix |
 |---|---|
-| `401 Invalid ... credentials` / "Please run /login" | token hết hạn → login lại, HOẶC dùng token dài hạn + xoá `.credentials.json` (file creds đè env token) |
-| `401 Invalid bearer token` | token sai loại — đã dán code `xxx#yyy` thay vì `sk-ant-oat01-...` |
-| `Failed to load marketplace: cache-miss` | path plugin lệch (volume cũ) → entrypoint tự heal khi boot, hoặc `claude plugin marketplace add` lại |
-| `node: not found` (caveman) | image mới có sẵn node→bun; bản cũ: `docker exec -u root <bot> ln -sf /usr/local/bin/bun /usr/local/bin/node` |
-| bypass dialog làm treo bot | dùng `acceptEdits`, hoặc attach tmux accept tay |
-| tg-access chạy xong không lưu | thiếu `-u botuser` |
-| GHCR pull `denied` (image public) | creds cũ → `docker logout ghcr.io` rồi pull lại |
-| Bot mới không có plugin đã bake | volume cũ đã seed → `claude plugin install` tay, hoặc volume sạch |
-| Bot như chết sau recreate (session sống nhưng không nhận tin) | poller kẹt, `pending_update_count`>0 không drain → `docker restart <bot>` |
-| Bot cũ thiếu permissions/base CLAUDE.md/.workspace | chỉ seed volume MỚI → merge tay `/data/.claude/settings.json` + recreate/pull image mới, rồi restart |
-| Mất network phụ (vd `db-shared`) sau recreate | recreate trơn không giữ network → thêm `--network <net>` vào `docker run` |
-| Playwright MCP "Failed to connect" | dùng `npx @playwright/mcp@latest` → phải là `playwright-mcp --headless` (binary bake) + image `:playwright` |
+| `401 Invalid ... credentials` / "Please run /login" | token expired → log in again, OR use a long-lived token + delete `.credentials.json` (the creds file overrides the env token) |
+| `401 Invalid bearer token` | wrong token type — you pasted the code `xxx#yyy` instead of `sk-ant-oat01-...` |
+| `Failed to load marketplace: cache-miss` | plugin path drift (old volume) → the entrypoint self-heals on boot, or re-run `claude plugin marketplace add` |
+| `node: not found` | new images ship node→bun; on an old one: `docker exec -u root <bot> ln -sf /usr/local/bin/bun /usr/local/bin/node` |
+| bypass dialog hangs the bot | use `acceptEdits`, or attach tmux and accept by hand |
+| tg-access changes don't persist | missing `-u botuser` |
+| GHCR pull `denied` (public image) | stale creds → `docker logout ghcr.io` then pull again |
+| New bot missing the baked plugins | old volume was already seeded → `claude plugin install` by hand, or use a clean volume |
+| Bot looks dead after recreate (session alive but not receiving messages) | poller stuck, `pending_update_count`>0 not draining → `docker restart <bot>` |
+| Old bot missing permissions/base CLAUDE.md/.workspace | only seeded on FRESH volumes → merge `/data/.claude/settings.json` by hand + recreate/pull the new image, then restart |
+| Lost an extra network (e.g. `db-shared`) after recreate | a plain recreate doesn't keep the network → add `--network <net>` to `docker run` |
+| Playwright MCP "Failed to connect" | using `npx @playwright/mcp@latest` → must be `playwright-mcp --headless` (baked binary) + the `:playwright` image |

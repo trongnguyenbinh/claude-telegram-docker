@@ -1,10 +1,13 @@
-# Quy tắc: prototype trước, issue sau
+# Rule: prototype first, work item second
 
-Không tạo GitHub Issue đề bài khi PROTOTYPE chưa được PO/BA accept. Thứ tự bắt buộc:
+Do not create the work item for a brief until the PROTOTYPE has been accepted by the
+stakeholders. The required order:
 
-1. Làm rõ đề bài + viết acceptance criteria.
-2. Dựng prototype UI → deploy Vercel preview → gửi link cho PO/BA.
-3. Chờ PO/BA accept rõ ràng (không tự suy diễn là đã duyệt).
-4. Accept xong mới: tạo Issue (Issue Form) + commit spec `docs/` + sync mempalace + publish kênh chung.
+1. Clarify the brief + write the acceptance criteria.
+2. Build a UI prototype → deploy a preview → send the link to the stakeholders.
+3. Wait for explicit stakeholder sign-off (don't infer approval on your own).
+4. Only after sign-off: create the work item (use the issue form/template if present) +
+   commit the spec to `docs/` + sync the shared knowledge base + publish the handoff.
 
-Lý do: issue là gốc chuỗi truy vết; tạo sớm khi spec chưa chốt sẽ đẻ ra issue rác + sub-issue sai.
+Why: the work item is the root of the traceability chain; creating it early, before the spec
+is settled, breeds junk items + wrong sub-tasks.
