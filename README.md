@@ -5,7 +5,7 @@
 Chạy một con bot Telegram do Claude Code vận hành, gói gọn trong một container duy nhất. **1 image = 1 bot.**
 Thiết kế chi tiết: [`SPEC.md`](./SPEC.md). Bảng lệnh vận hành nhanh: [`CHEATSHEET.md`](./CHEATSHEET.md). Vận hành & xử lý sự cố: [`OPERATIONS.md`](./OPERATIONS.md).
 
-## Tính năng (v1.7.0)
+## Tính năng (v1.7.1)
 
 - **Quy tắc nền bake sẵn** (`default-CLAUDE.md` → `/data/.claude/CLAUDE.md`, user-level memory, CLAUDE.md work-dir của từng bot layer chồng lên): chỉ nghe owner, phát hiện prompt-injection + cảnh báo owner, cách ly thông tin (không lộ nội dung DM riêng, không mang context giữa các group/DM), bắt xác nhận việc phá hoại, giọng trả lời lịch sự **ghi đè** chế độ cộc lốc/caveman, và tự kiểm tra đã gọi reply tool chưa. Nội dung nền + role hiện là tiếng Anh, tổng quát, không dính dự án/owner cụ thể — phần glue riêng của bạn đặt ở lớp overlay per-bot.
 - **Bộ não thứ hai `.workspace/{rules,memory,events,status}`** tạo sẵn trong work dir ở lần chạy đầu; quy ước ghi nằm trong quy tắc nền; đồng bộ tuỳ chọn với một shared memory MCP (vd mempalace).
@@ -17,7 +17,7 @@ Thiết kế chi tiết: [`SPEC.md`](./SPEC.md). Bảng lệnh vận hành nhanh
 - **Công cụ vận hành**: `bot-doctor` (`docker exec <bot> bot-doctor` — check tmux session / permission mode / poller pending-drain / locale / base CLAUDE.md / .workspace / login + in cách fix) và `tg-healthcheck` gắn làm Docker HEALTHCHECK (đánh dấu container `unhealthy` khi tmux session `claude` chết). Playbook + gotcha ở [`OPERATIONS.md`](./OPERATIONS.md).
 - **Biến thể `:playwright`** cho bot cần render UI + chụp màn hình (xem mục dưới).
 - **Bot chuyên trách (role profiles)** qua `-e BOT_ROLE=<ba|planner|dev-fe|dev-be|tester|infra>`: seed thêm 1 lớp CLAUDE.md + settings + rules cho từng vai trò trong quy trình delivery, cộng thêm vai trò `infra` tổng quát cho hạ tầng của cả fleet, chồng lên base. Bỏ trống = mặc định như cũ (xem mục dưới).
-- **v1.7.0**: thêm vai trò `infra`; role-seeding (BOT_ROLE) giờ đã có trong image `:latest` đã publish, nên volume mới thực sự seed đúng CLAUDE.md/settings/rules của role được chọn.
+- **v1.7.1**: gỡ bỏ tool `rtk` bake sẵn trong image cùng PreToolUse hook của nó — `rtk` vốn là công cụ tối ưu token cá nhân trên máy chủ owner, bake nhầm vào image; binary x86_64/glibc-2.39 fail trên container arm64, gây spam lỗi hook PreToolUse (không chặn) ở mọi lệnh Bash. `SessionStart` hook (`tg-session-context`) vẫn giữ nguyên.
 
 ## Bắt đầu nhanh (dùng image đã publish — khỏi build, khỏi clone)
 
