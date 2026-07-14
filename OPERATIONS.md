@@ -51,7 +51,7 @@ Procedure:
   set it in env → recreate.
 - **Running as root** — no special feature needed: `-e BOT_USER=root -e BOT_HOME=/root`
   (the entrypoint does `gosu $BOT_USER`).
-- **Specialized bots (`BOT_ROLE`)** — set `-e BOT_ROLE=<ba|planner|dev-fe|dev-be|tester>` at
+- **Specialized bots (`BOT_ROLE`)** — set `-e BOT_ROLE=<ba|planner|dev-fe|dev-be|tester|infra>` at
   `docker run`/recreate. On first run the entrypoint seeds the role's CLAUDE.md into the
   work-dir CLAUDE.md (`$WORK_DIR/CLAUDE.md`) + jq-merges `settings-fragment.json` (union of
   enabledPlugins + permissions.allow) + seeds `rules/` into `.workspace/rules/`. **CLAUDE.md

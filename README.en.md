@@ -5,7 +5,7 @@
 Run a Claude-Code-powered Telegram bot as a single container. **1 image = 1 bot.**
 Full design: [`SPEC.md`](./SPEC.md). Quick command table: [`CHEATSHEET.md`](./CHEATSHEET.md). Operations & troubleshooting: [`OPERATIONS.md`](./OPERATIONS.md).
 
-## Features (v1.6.0)
+## Features (v1.7.0)
 
 - **Baked base rules** (`default-CLAUDE.md` → `/data/.claude/CLAUDE.md`, user-level memory; each bot's work-dir CLAUDE.md layers on top): owner-only authority, prompt-injection detection + owner alert, information isolation (never leak owner DM content, never carry context across groups/DMs), destructive-op confirmation, a polite reply tone that **overrides** caveman/terse mode for user-facing replies, and a reply self-check (did I actually call the reply tool?). Generic, English, project-neutral — supply project-specific glue in your own per-bot overlay.
 - **Second-brain `.workspace/{rules,memory,events,status}`** skeleton created in the work dir on first run; conventions live in the base rules; optionally syncs with a shared memory MCP (e.g. mempalace).
@@ -16,7 +16,8 @@ Full design: [`SPEC.md`](./SPEC.md). Quick command table: [`CHEATSHEET.md`](./CH
 - **Run as root** (no image change): `-e BOT_USER=root -e BOT_HOME=/root`.
 - **Ops tooling**: `bot-doctor` (`docker exec <bot> bot-doctor` — checks tmux session / permission mode / poller pending-drain / locale / base CLAUDE.md / .workspace / login + prints the fix) and `tg-healthcheck` wired as a Docker HEALTHCHECK (marks the container `unhealthy` if the tmux `claude` session dies). Playbook + gotchas in [`OPERATIONS.md`](./OPERATIONS.md).
 - **`:playwright` variant** for bots that render UI + screenshot (see below).
-- **Role profiles** via `-e BOT_ROLE=<ba|planner|dev-fe|dev-be|tester>`: layer a role-specific CLAUDE.md + settings + rules on top of the base for each stage of the delivery workflow. Unset = unchanged default behavior (see below).
+- **Role profiles** via `-e BOT_ROLE=<ba|planner|dev-fe|dev-be|tester|infra>`: layer a role-specific CLAUDE.md + settings + rules on top of the base for each stage of the delivery workflow, plus a generic `infra` ops role for the fleet itself. Unset = unchanged default behavior (see below).
+- **v1.7.0**: added the `infra` ops role; role-seeding (BOT_ROLE) is now reflected in the published `:latest` image, so a fresh volume actually seeds the requested role's CLAUDE.md/settings/rules (previously only present starting at the source tag that introduced role-seeding, not yet in a rebuilt `:latest`).
 
 ## Quick start (from the published image — no build, no clone)
 
@@ -89,7 +90,7 @@ docker exec claude-tg-bot claude auth status   # loggedIn:true
 | `OWNER_ID` | ✅ | your Telegram user_id (single owner) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | recommended | headless auth — generate once with `claude setup-token`, paste here. Survives volume wipes. |
 | `PERMISSION_MODE` | optional | `auto`/`default`/`acceptEdits`/`bypassPermissions`/`manual`/`plan`. **Unset = `auto`** — classifier-gated Auto Mode: auto-approves safe actions, blocks risky/production ones → runs unattended without hanging, still safe. Override when needed, e.g. `acceptEdits` (which still prompts on every Bash command). |
-| `BOT_ROLE` | optional | Specialized role: `ba`/`planner`/`dev-fe`/`dev-be`/`tester`. Seeds the role's CLAUDE.md + settings + rules (layered on the base) on first run. **Unset / `default` = unchanged default behavior.** See [Role profiles](#role-profiles) + `roles/README.md`. |
+| `BOT_ROLE` | optional | Specialized role: `ba`/`planner`/`dev-fe`/`dev-be`/`tester`/`infra`. Seeds the role's CLAUDE.md + settings + rules (layered on the base) on first run. **Unset / `default` = unchanged default behavior.** See [Role profiles](#role-profiles) + `roles/README.md`. |
 | `WORK_DIR` | optional | dir the bot's claude runs in (file ops land here, pre-trusted). Default `/working-directory/claude-telegram-bot`; persisted on the `botwork` volume. |
 | `ANTHROPIC_API_KEY` | fallback | pay-per-token instead of your subscription |
 | `MODEL` / `TZ` | optional | |
@@ -126,6 +127,7 @@ A bot can boot into a **role** in the AI delivery workflow (Define/BA → Planni
 | `dev-fe` | Build (FE) | Pick an `area:frontend` sub-task → branch → code UI → PR `Closes #issue`; gate-aware (quality + security); frontend-design + preview deploy + Playwright. |
 | `dev-be` | Build (BE) | Pick an `area:backend` sub-task → branch → code API/DB + migration → PR `Closes #issue`; migration/db + gate awareness. |
 | `tester` | Tester/QA | From the release notes write test guidance + test cases; receive a bug report from the test site → cross-check the spec → if it looks like a real bug, publish to the channel + tag the lead. |
+| `infra` | Ops (cross-cutting) | Generic DevOps/infra-ops agent for the bot fleet + shared services: deploy/recreate/update bots (env-preserving), health/logs triage, service config, inventory → shared memory. Owner-only; mandatory typed confirmation before any destructive op; never prints secrets; audits every action. |
 
 **Unset / empty / `default` = unchanged default behavior** (existing bots are unaffected). An unknown role → the entrypoint logs a note and runs as default.
 
