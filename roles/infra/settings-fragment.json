@@ -1,0 +1,13 @@
+{
+  "_note": "Infra/Ops role: docker + host ops (deploy/recreate/update bots, service config, health/logs). Bash(gh *) is already in the base; listed again to make intent clear. No extra Claude plugins needed beyond the baked ones.",
+  "enabledPlugins": {},
+  "permissions": {
+    "allow": [
+      "Bash(gh *)",
+      "Bash(docker *)",
+      "Bash(docker compose *)",
+      "Bash(systemctl status *)",
+      "Bash(journalctl *)"
+    ]
+  }
+}

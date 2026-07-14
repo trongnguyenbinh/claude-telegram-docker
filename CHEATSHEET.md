@@ -12,7 +12,7 @@ Replace `<bot>` with the container name (e.g. `claude-tg-bot-qc`). **Most comman
 | Restart (keep everything) | `docker restart <bot>` |
 | Recreate (change env, KEEP volumes) | `docker rm -f <bot> && docker run -d --name <bot> -it --restart unless-stopped -e ... -v <bot>-data:/data -v <bot>-work:/working-directory <image>` |
 | Run a new bot | as above with a new volume + token |
-| Run a specialized (role) bot | add `-e BOT_ROLE=<ba\|planner\|dev-fe\|dev-be\|tester>` to `docker run` — seeds the role's CLAUDE.md + settings + rules (first run). Unset = default behavior. See `roles/README.md` |
+| Run a specialized (role) bot | add `-e BOT_ROLE=<ba\|planner\|dev-fe\|dev-be\|tester\|infra>` to `docker run` — seeds the role's CLAUDE.md + settings + rules (first run). Unset = default behavior. See `roles/README.md` |
 
 ## Login / Auth
 

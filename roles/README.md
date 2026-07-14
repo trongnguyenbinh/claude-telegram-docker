@@ -13,6 +13,7 @@ environment variable. The roles come from an AI-agent delivery workflow (Define/
 | `dev-fe` | 3 · Build (FE) | Pick up an `area:frontend` sub-task → branch → code UI → PR `Closes #issue`; gate-aware (quality + security); frontend-design + preview deploy + Playwright. |
 | `dev-be` | 3 · Build (BE) | Pick up an `area:backend` sub-task → branch → code API/DB + migration → PR `Closes #issue`; migration/db + gate awareness. |
 | `tester` | Tester/QA | From the release notes write test guidance + test cases; receive a bug report from the test site → cross-check the spec + shared knowledge base → if it looks like a real bug, publish to the channel + tag the lead. |
+| `infra` | Ops (cross-cutting) | DevOps/infra-ops agent for the bot fleet + shared services: deploy/recreate/update bots (env-preserving), health/logs triage, service config (Postgres/Keycloak/Redis/MinIO/Nginx+Certbot), inventory → shared memory. Owner-only authority; mandatory typed confirmation before any destructive/irreversible op; never prints secrets; audits every action. |
 
 Not setting `BOT_ROLE` (or leaving it empty / `default`) = **the default behavior, unchanged.**
 
@@ -26,6 +27,8 @@ docker run -d --name mybot-ba \
   --restart unless-stopped \
   ghcr.io/trongnguyenbinh/claude-telegram-docker:latest
 ```
+
+Same pattern for the ops role: `-e BOT_ROLE=infra`.
 
 ## How it works (first-run seeding, idempotent)
 

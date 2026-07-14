@@ -93,7 +93,7 @@ CLAUDE.md (owner-only authority, no secret leakage, verify before claiming done)
 
 ## Adding a role
 
-Role profiles (`BOT_ROLE=ba|planner|dev-fe|dev-be|tester`) live in [`roles/`](./roles/).
+Role profiles (`BOT_ROLE=ba|planner|dev-fe|dev-be|tester|infra`) live in [`roles/`](./roles/).
 To add one, create `roles/<role>/` with a `CLAUDE.md` (the role's "how I work" rules,
 layered on top of the base), a minimal valid `settings-fragment.json` (extra
 `enabledPlugins` + `permissions.allow`, never disabling base plugins), and optionally
