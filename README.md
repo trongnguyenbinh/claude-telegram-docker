@@ -183,3 +183,9 @@ docker restart <bot>
 ## Giấy phép
 
 [MIT](./LICENSE) © Edward Nguyen
+
+## Contributors
+
+Thanks to everyone who has contributed to this project 💙
+
+[![Contributors](https://contrib.rocks/image?repo=trongnguyenbinh/claude-telegram-docker)](https://github.com/trongnguyenbinh/claude-telegram-docker/graphs/contributors)
