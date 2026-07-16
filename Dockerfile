@@ -112,6 +112,13 @@ USER root
 RUN ln -sf /home/botuser/.bun/bin/bun /usr/local/bin/bun \
  && ln -sf /home/botuser/.bun/bin/bun /usr/local/bin/node
 
+# Claude Code v2.1+ gates `--channels` behind managed settings for some auth/org
+# modes. The container is the managed runtime, so bake the Telegram channel policy
+# at the Linux system-managed settings path before the non-root session starts.
+RUN mkdir -p /etc/claude-code \
+ && printf '%s\n' '{"channelsEnabled":true,"allowedChannelPlugins":[{"marketplace":"claude-plugins-official","plugin":"telegram"}]}' > /etc/claude-code/managed-settings.json \
+ && jq -e '.channelsEnabled == true and (.allowedChannelPlugins | index({"marketplace":"claude-plugins-official","plugin":"telegram"}))' /etc/claude-code/managed-settings.json >/dev/null
+
 COPY scripts/tg-access /usr/local/bin/tg-access
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 # Default base CLAUDE.md (security + .workspace architecture) — entrypoint seeds it

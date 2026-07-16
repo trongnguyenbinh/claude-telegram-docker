@@ -1,0 +1,6 @@
+*.sh text eol=lf
+Dockerfile text eol=lf
+Dockerfile.* text eol=lf
+scripts/bot-doctor text eol=lf
+scripts/tg-access text eol=lf
+scripts/tg-healthcheck text eol=lf

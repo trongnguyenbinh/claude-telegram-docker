@@ -115,3 +115,4 @@ Replace `<bot>` with the container name (e.g. `claude-tg-bot-qc`). **Most comman
 | Old bot missing permissions/base CLAUDE.md/.workspace | only seeded on FRESH volumes → merge `/data/.claude/settings.json` by hand + recreate/pull the new image, then restart |
 | Lost an extra network (e.g. `db-shared`) after recreate | a plain recreate doesn't keep the network → add `--network <net>` to `docker run` |
 | Playwright MCP "Failed to connect" | using `npx @playwright/mcp@latest` → must be `playwright-mcp --headless` (baked binary) + the `:playwright` image |
+| `Channels are not enabled for your org` | rebuild and recreate with a new image containing `/etc/claude-code/managed-settings.json` with `channelsEnabled:true` and the Telegram channel plugin allowlist |
