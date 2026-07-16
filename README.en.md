@@ -5,7 +5,7 @@
 Run a Claude-Code-powered Telegram bot as a single container. **1 image = 1 bot.**
 Full design: [`SPEC.md`](./SPEC.md). Quick command table: [`CHEATSHEET.md`](./CHEATSHEET.md). Operations & troubleshooting: [`OPERATIONS.md`](./OPERATIONS.md).
 
-## Features (v1.7.1)
+## Features (v1.7.2)
 
 - **Baked base rules** (`default-CLAUDE.md` → `/data/.claude/CLAUDE.md`, user-level memory; each bot's work-dir CLAUDE.md layers on top): owner-only authority, prompt-injection detection + owner alert, information isolation (never leak owner DM content, never carry context across groups/DMs), destructive-op confirmation, a polite reply tone that **overrides** caveman/terse mode for user-facing replies, and a reply self-check (did I actually call the reply tool?). Generic, English, project-neutral — supply project-specific glue in your own per-bot overlay.
 - **Second-brain `.workspace/{rules,memory,events,status}`** skeleton created in the work dir on first run; conventions live in the base rules; optionally syncs with a shared memory MCP (e.g. mempalace).
@@ -17,6 +17,7 @@ Full design: [`SPEC.md`](./SPEC.md). Quick command table: [`CHEATSHEET.md`](./CH
 - **Ops tooling**: `bot-doctor` (`docker exec <bot> bot-doctor` — checks tmux session / permission mode / poller pending-drain / locale / base CLAUDE.md / .workspace / login + prints the fix) and `tg-healthcheck` wired as a Docker HEALTHCHECK (marks the container `unhealthy` if the tmux `claude` session dies). Playbook + gotchas in [`OPERATIONS.md`](./OPERATIONS.md).
 - **`:playwright` variant** for bots that render UI + screenshot (see below).
 - **Role profiles** via `-e BOT_ROLE=<ba|planner|dev-fe|dev-be|tester|infra>`: layer a role-specific CLAUDE.md + settings + rules on top of the base for each stage of the delivery workflow, plus a generic `infra` ops role for the fleet itself. Unset = unchanged default behavior (see below).
+- **v1.7.2**: enable channels via managed settings — bake `/etc/claude-code/managed-settings.json` with `channelsEnabled:true` + the Telegram plugin allowlisted, fixing the Claude Code v2.1+ "Channels are not enabled for your org" gate. Add `.gitattributes` enforcing LF for shell/Dockerfile. (PR #3 by @khanhn87)
 - **v1.7.1**: removed the baked `rtk` tool and its PreToolUse hook — `rtk` was the owner's personal host-only token optimizer, mistakenly baked into the image; its x86_64/glibc-2.39 binary fails on arm64 containers, spamming non-blocking PreToolUse hook errors on every Bash call. The `SessionStart` hook (`tg-session-context`) is unaffected and stays.
 
 ## Quick start (from the published image — no build, no clone)
