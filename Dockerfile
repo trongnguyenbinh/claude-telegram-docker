@@ -61,17 +61,6 @@ RUN mkdir -p "$CLAUDE_STAGE" \
  && CLAUDE_CONFIG_DIR="$CLAUDE_STAGE" claude plugin install caveman@caveman \
  && test -d "$CLAUDE_STAGE/plugins" && test -f "$CLAUDE_STAGE/settings.json"
 
-# --- rtk (Rust token-killer): CLI binary + Claude Code hook (rewrites bash → rtk, saves tokens) ---
-# Not a plugin — a standalone binary that hooks into Claude Code. Install binary for botuser,
-# then seed its hook into the staged config so the bot picks it up.
-RUN curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
-# Wire rtk's PreToolUse/Bash rewrite hook into the staged config (rtk init -g doesn't
-# persist to CLAUDE_STAGE); seeds to the bot's /data/.claude/settings.json on first run.
-RUN cfg="$CLAUDE_STAGE/settings.json"; tmp="$(mktemp)"; \
-    jq '.hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{"matcher":"Bash","hooks":[{"type":"command","command":"rtk hook claude"}]}])' "$cfg" > "$tmp" \
- && mv "$tmp" "$cfg" \
- && grep -q "rtk hook claude" "$cfg"
-
 # --- Default reasoning effort: high — bots think deeper by default. Only seeds
 # FRESH volumes (existing bots keep whatever effortLevel their /data settings has;
 # change a running bot via its /data/.claude/settings.json + restart).
