@@ -9,9 +9,10 @@
 # via gosu before exec'ing `claude --channels`.
 FROM debian:bookworm-slim
 
-# --- system deps (gosu = privilege drop root -> botuser; cron = scheduled reminders) ---
+# --- system deps (gosu = privilege drop root -> botuser; cron = scheduled reminders;
+#     python3 = runtime for the telegram markdownv2/reply-guard hooks) ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git curl ca-certificates jq tini bash unzip gosu tmux openssh-client cron \
+      git curl ca-certificates jq tini bash unzip gosu tmux openssh-client cron python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # --- gh CLI (GitHub: clone/pull/push, gh run list / GH Actions) via GitHub's apt repo ---
@@ -76,6 +77,18 @@ RUN cfg="$CLAUDE_STAGE/settings.json"; tmp="$(mktemp)"; \
  && mv "$tmp" "$cfg" \
  && grep -q "tg-session-context" "$cfg"
 
+# --- Telegram reply guard hooks: (1) PreToolUse on the telegram reply tool - block
+# and re-prompt if a ``` code block is sent without format:'markdownv2' (renders as
+# literal backticks) or markdownv2 prose has unescaped special chars (Telegram
+# rejects with HTTP 400); (2) Stop hook - block ending the turn if the triggering
+# message was a Telegram channel message but no telegram reply tool call happened
+# (transcript text never reaches the user, so a forgotten reply must not pass silently). ---
+RUN cfg="$CLAUDE_STAGE/settings.json"; tmp="$(mktemp)"; \
+    jq '.hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{"matcher":"mcp__plugin_telegram_telegram__reply","hooks":[{"type":"command","command":"python3 /usr/local/bin/tg-markdownv2-guard.py"}]}]) | .hooks.Stop = ((.hooks.Stop // []) + [{"hooks":[{"type":"command","command":"python3 /usr/local/bin/tg-reply-guard.py"}]}])' "$cfg" > "$tmp" \
+ && mv "$tmp" "$cfg" \
+ && grep -q "tg-markdownv2-guard" "$cfg" \
+ && grep -q "tg-reply-guard" "$cfg"
+
 # --- Bake default security permissions into the staged settings.json ---
 # deny reading secrets in the work dir / cloned repos (cwd-anchored, so the bot's
 # own /data/telegram/.env token is NOT blocked) + a few destructive circuit-breakers.
@@ -123,7 +136,10 @@ COPY scripts/bot-doctor /usr/local/bin/bot-doctor
 COPY scripts/tg-healthcheck /usr/local/bin/tg-healthcheck
 COPY scripts/tg-watchdog /usr/local/bin/tg-watchdog
 COPY scripts/tg-session-context /usr/local/bin/tg-session-context
-RUN chmod +x /usr/local/bin/tg-access /usr/local/bin/entrypoint.sh /usr/local/bin/bot-doctor /usr/local/bin/tg-healthcheck /usr/local/bin/tg-watchdog /usr/local/bin/tg-session-context \
+# Telegram reply guard hooks (markdownv2 format check + forgotten-reply check).
+COPY scripts/tg-markdownv2-guard.py /usr/local/bin/tg-markdownv2-guard.py
+COPY scripts/tg-reply-guard.py /usr/local/bin/tg-reply-guard.py
+RUN chmod +x /usr/local/bin/tg-access /usr/local/bin/entrypoint.sh /usr/local/bin/bot-doctor /usr/local/bin/tg-healthcheck /usr/local/bin/tg-watchdog /usr/local/bin/tg-session-context /usr/local/bin/tg-markdownv2-guard.py /usr/local/bin/tg-reply-guard.py \
  && printf '* * * * * root /usr/local/bin/tg-watchdog >> /tmp/tg-watchdog.log 2>&1\n' > /etc/cron.d/tg-watchdog \
  && chmod 0644 /etc/cron.d/tg-watchdog
 
