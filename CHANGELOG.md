@@ -42,3 +42,45 @@ docker exec -u botuser <bot> tg-access group add <groupId>   # in the terminal o
 ```
 
 Rollback = keep the old v1.x container/volume until v2.2 runs cleanly.
+
+## v2.0.0 – v2.0.2 — `~/.claude` layout experiment (superseded by v2.2)
+
+Moved all state to a single default `~/.claude` volume (dropping the `/data` custom
+paths), botuser-only, with a three-layer poller self-heal (startup self-check that
+restarts the session if `bot.pid` is absent, a `tg-watchdog` that restarts a dead
+poller, and a healthcheck that reports unhealthy when the poller is down). v2.0.1/2
+softened the self-check loop and moved the telegram state off the `channels/`
+namespace to `~/.claude/telegram`. **These releases still ran `claude --channels`,
+so they never fully beat the underlying poller flakiness** — superseded by the v2.2
+worker transport. Migration was defined as a manual clean-install (a copy-migration
+breaks the plugin cache paths). Built as version tags only; `:latest` stayed on v1.x.
+
+## v1.7.3
+
+- New Telegram hooks: a **markdownv2-format guard** and a **forgotten-reply guard**.
+- Added a Contributors section (contrib.rocks avatar grid).
+
+## v1.7.2
+
+- Fix (PR #3, from @khanhn87): enable Telegram channel settings via a baked
+  `managed-settings.json` (`channelsEnabled` + allowlist) so `--channels` works on
+  admin-controlled Claude Teams.
+
+## v1.7.1
+
+- Removed the baked `rtk` tool and its PreToolUse hook.
+
+## v1.7.0
+
+- Added a generic **infra/ops** role profile.
+
+## v1.6.0
+
+- Generic English base image + role-instruction content.
+- **Selectable `BOT_ROLE` profiles**: `ba` / `planner` / `dev-fe` / `dev-be` / `tester`.
+- Default `effortLevel=high` in the staged settings (fresh volumes only).
+- SessionStart hook auto-loads the `.workspace` context (no blank bot after recreate).
+- Added `CONTRIBUTING.md`.
+- Fix: install Chromium via `@playwright/mcp`'s own pinned `playwright-core`.
+- `tg-watchdog` — cron auto-heal for a stalled `--channels` poller (removed in v2.2).
+- `.env.example` recommends `PERMISSION_MODE=auto`.

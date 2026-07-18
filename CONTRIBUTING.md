@@ -54,7 +54,7 @@ SPEC.md · README.md · CHANGELOG.md · CHEATSHEET.md · OPERATIONS.md
 
 1. Create a feature branch: `git checkout -b feat/my-thing` (or `fix/…`, `docs/…`).
 2. Make the change. Update docs when you change behavior (README /
-   CHEATSHEET / OPERATIONS), and bump the version header in the README if it's a
+   CHEATSHEET / OPERATIONS), and add a `CHANGELOG.md` entry for a
    release-worthy feature.
 3. Verify it (see "How to verify" above).
 4. Commit with [Conventional Commits](https://www.conventionalcommits.org/) +

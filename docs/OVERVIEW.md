@@ -1,7 +1,7 @@
 # Claude Telegram Bot — from a single bot to a fleet with shared memory
 
 > A doc introducing the model, written incrementally: start from one simple bot, and wherever you hit a limit, upgrade there. All roles are described generically (using "owner", no personal identity).
-> Updated: 2026-07-19 (v2.2 — worker transport). Technical detail: [`LUONG-XU-LY.md`](./LUONG-XU-LY.md) · legacy native install: [`NATIVE-INSTALL.md`](./NATIVE-INSTALL.md) · Docker v2.2 build: [`../README.md`](../README.md).
+> Updated: 2026-07-19 (v2.2 — worker transport). Legacy native install: [`NATIVE-INSTALL.md`](./NATIVE-INSTALL.md) · Docker v2.2 build: [`../README.md`](../README.md).
 
 ---
 
