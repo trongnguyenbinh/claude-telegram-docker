@@ -143,8 +143,8 @@ RUN chmod +x /usr/local/bin/tg-access /usr/local/bin/entrypoint.sh /usr/local/bi
  && printf '* * * * * root /usr/local/bin/tg-watchdog >> /tmp/tg-watchdog.log 2>&1\n' > /etc/cron.d/tg-watchdog \
  && chmod 0644 /etc/cron.d/tg-watchdog
 
-# Liveness check: mark the container unhealthy if the tmux 'claude' session dies.
-# (Poller stalls leave the session alive — use `docker exec <c> bot-doctor` for those.)
+# Liveness check: unhealthy if the tmux 'claude' session dies OR the telegram
+# channel poller (bot.pid) is dead (v2 — a mute-but-alive bot now surfaces).
 HEALTHCHECK --interval=60s --timeout=10s --start-period=90s --retries=3 \
   CMD /usr/local/bin/tg-healthcheck
 

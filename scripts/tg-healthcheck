@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
 # tg-healthcheck — Docker HEALTHCHECK cho bot claude-telegram-docker.
-# Kiểm tra LIVENESS: tmux session 'claude' còn sống không (bắt được crash/exit).
-# exit 0 = healthy, 1 = unhealthy. Cố ý KHÔNG gọi Telegram API mỗi vòng (tránh
-# rate-limit + false-negative do mạng chập chờn) — poller-stall thì dùng `bot-doctor`.
+# exit 0 = healthy, 1 = unhealthy.
+# v2: kiểm tra CẢ HAI — (1) tmux session 'claude' còn sống (bắt crash/exit) và
+# (2) telegram channel poller còn chạy (bot.pid alive). Poller chết làm bot CÂM
+# dù session trông vẫn ổn (bug bot-toa-an 2026-07-18) → phải báo unhealthy.
+# Cố ý KHÔNG gọi Telegram API mỗi vòng (tránh rate-limit + false-negative do mạng).
 BOT_USER="${BOT_USER:-botuser}"
-if [ "$(id -u)" = "0" ] && command -v gosu >/dev/null 2>&1; then
-  gosu "$BOT_USER" tmux has-session -t claude 2>/dev/null && exit 0
-else
-  tmux has-session -t claude 2>/dev/null && exit 0
+STATE_DIR="${TELEGRAM_STATE_DIR:-/home/botuser/.claude/channels/telegram}"
+g() { if [ "$(id -u)" = "0" ] && command -v gosu >/dev/null 2>&1; then gosu "$BOT_USER" "$@"; else "$@"; fi; }
+
+# 1) tmux 'claude' session alive?
+g tmux has-session -t claude 2>/dev/null || { echo "unhealthy: tmux 'claude' session dead"; exit 1; }
+
+# 2) telegram poller alive?
+PID="$(cat "$STATE_DIR/bot.pid" 2>/dev/null || true)"
+if [ -z "$PID" ] || [ ! -d "/proc/$PID" ]; then
+  echo "unhealthy: telegram poller not running (bot.pid='$PID')"
+  exit 1
 fi
-exit 1
+exit 0
