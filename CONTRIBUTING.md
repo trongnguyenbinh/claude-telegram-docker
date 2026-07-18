@@ -47,7 +47,7 @@ scripts/                ← baked tools: tg-worker.py (the worker), tg-reminder,
 roles/                  ← role profiles (BOT_ROLE): per-role CLAUDE.md +
                           settings-fragment.json + optional rules/ (see roles/README.md)
 .github/workflows/      ← CI (build + push both image variants)
-SPEC.md · README.md · README.en.md · CHEATSHEET.md · OPERATIONS.md
+SPEC.md · README.md · CHANGELOG.md · CHEATSHEET.md · OPERATIONS.md
 ```
 
 ## PR Guidelines
