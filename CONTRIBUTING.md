@@ -26,24 +26,24 @@ real bot. Before opening a PR, confirm:
 1. **CI build is green** — both jobs: `build-and-push` (base) and `build-playwright`
    (the `:playwright` variant, which is built `FROM` the base).
 2. **The bot boots + works on a real container** — run `docker exec <bot> bot-doctor`;
-   all checks should pass (tmux session, permission mode `auto`, poller `pending=0`,
-   UTF-8 locale, base CLAUDE.md, `.workspace/`, login).
+   all checks should pass (worker process alive, heartbeat fresh, permission/tools, poller
+   `pending=0`, UTF-8 locale, base CLAUDE.md, `.workspace/`, login).
 3. **For `:playwright` changes** — verify a screenshot actually renders (as `botuser`):
    `docker exec -u botuser <bot> bash -lc 'node $(npm root -g)/@playwright/mcp/node_modules/playwright-core/cli.js screenshot https://example.com /tmp/t.png; ls -la /tmp/t.png'`.
 4. **After any entrypoint/Dockerfile change** — recreate a bot from the new image and
-   confirm `getWebhookInfo`'s `pending_update_count` drains to 0 (poller not stalled;
-   see `OPERATIONS.md`).
+   confirm the worker is polling (`bot-doctor`: worker alive + fresh heartbeat +
+   `pending_update_count` draining to 0; see `OPERATIONS.md`).
 
 Evidence before assertions: don't claim "works" without one of the checks above.
 
 ## Project Structure
 
 ```
-Dockerfile              ← base image (debian-slim + bun + claude + baked plugins/config)
+Dockerfile              ← base image (debian-slim + bun + claude + python3 + baked plugins/config)
 Dockerfile.playwright   ← :playwright variant (FROM base + Node + Chromium)
-entrypoint.sh           ← first-run seeding (idempotent, self-healing) + launch in tmux
-scripts/                ← baked tools: tg-access, bot-doctor, tg-healthcheck,
-                          tg-watchdog, default-CLAUDE.md
+entrypoint.sh           ← first-run seeding (idempotent, self-healing) + exec the worker
+scripts/                ← baked tools: tg-worker.py (the worker), tg-reminder, tg-access,
+                          bot-doctor, tg-healthcheck, tg-session-context, default-CLAUDE.md
 roles/                  ← role profiles (BOT_ROLE): per-role CLAUDE.md +
                           settings-fragment.json + optional rules/ (see roles/README.md)
 .github/workflows/      ← CI (build + push both image variants)
@@ -114,13 +114,13 @@ Full guide: [`roles/README.md`](./roles/README.md).
 
 ## Architecture Principles
 
-- **1 image = 1 bot** — one token, one container, one `/data` volume (Telegram allows
-  only one `getUpdates` poller per token).
+- **1 image = 1 bot** — one token, one container, one `~/.claude` volume (Telegram allows
+  only one `getUpdates` poller per token, owned by the worker).
 - **Base lean, variants `FROM` base** — a feature added to the base is inherited by
   every variant (e.g. `:playwright`) for free.
 - **Config via env + `docker exec`, not code** — permission mode, model, MCPs, access
   are runtime knobs; don't hardcode.
-- **Durable state on volumes + mempalace** — the live `--channels` session context is
-  disposable; anything worth keeping goes to `/data`, `.workspace/`, or mempalace.
+- **Durable state on the volume + mempalace** — each `claude -p` turn's RAM context is
+  disposable; anything worth keeping goes to `~/.claude`, `.workspace/`, or mempalace.
 
 If you're planning a significant change, open an issue first to discuss the approach.

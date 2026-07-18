@@ -5,129 +5,145 @@
 Chạy một con bot Telegram do Claude Code vận hành, gói gọn trong một container duy nhất. **1 image = 1 bot.**
 Thiết kế chi tiết: [`SPEC.md`](./SPEC.md). Bảng lệnh vận hành nhanh: [`CHEATSHEET.md`](./CHEATSHEET.md). Vận hành & xử lý sự cố: [`OPERATIONS.md`](./OPERATIONS.md).
 
-## Tính năng (v1.7.2)
+## v2.2 — transport "worker" (thay cho `--channels`)
 
-- **Quy tắc nền bake sẵn** (`default-CLAUDE.md` → `/data/.claude/CLAUDE.md`, user-level memory, CLAUDE.md work-dir của từng bot layer chồng lên): chỉ nghe owner, phát hiện prompt-injection + cảnh báo owner, cách ly thông tin (không lộ nội dung DM riêng, không mang context giữa các group/DM), bắt xác nhận việc phá hoại, giọng trả lời lịch sự **ghi đè** chế độ cộc lốc/caveman, và tự kiểm tra đã gọi reply tool chưa. Nội dung nền + role hiện là tiếng Anh, tổng quát, không dính dự án/owner cụ thể — phần glue riêng của bạn đặt ở lớp overlay per-bot.
-- **Bộ não thứ hai `.workspace/{rules,memory,events,status}`** tạo sẵn trong work dir ở lần chạy đầu; quy ước ghi nằm trong quy tắc nền; đồng bộ tuỳ chọn với một shared memory MCP (vd mempalace).
-- **`permissions` bake sẵn** trong settings.json: chặn đọc secret (`.env`/`secrets`/key, neo theo cwd nên KHÔNG chặn token `/data` của chính bot) + circuit-breaker cho lệnh phá hoại; cho phép git read-only + `gh` thường dùng.
-- **`gh` CLI + `cron` bake sẵn**: GitHub thao tác qua `gh` (auth bằng `-e GH_TOKEN=<PAT>` + `gh auth setup-git`, KHÔNG dùng github MCP plugin vì đang lỗi); cron daemon chạy sẵn cho nhắc lịch.
-- **Auto Mode mặc định** (`PERMISSION_MODE=auto`, classifier-gated) → bot không hỏi vặt mà vẫn chặn hành động rủi ro. (`acceptEdits` vẫn hỏi ở mọi lệnh Bash.)
-- **UTF-8** (`LANG=C.UTF-8` + `tmux -u`) để tiếng Việt render đúng khi attach session.
-- **Chạy dưới root** (không cần đổi image): `-e BOT_USER=root -e BOT_HOME=/root`.
-- **Công cụ vận hành**: `bot-doctor` (`docker exec <bot> bot-doctor` — check tmux session / permission mode / poller pending-drain / locale / base CLAUDE.md / .workspace / login + in cách fix) và `tg-healthcheck` gắn làm Docker HEALTHCHECK (đánh dấu container `unhealthy` khi tmux session `claude` chết). Playbook + gotcha ở [`OPERATIONS.md`](./OPERATIONS.md).
-- **Biến thể `:playwright`** cho bot cần render UI + chụp màn hình (xem mục dưới).
-- **Bot chuyên trách (role profiles)** qua `-e BOT_ROLE=<ba|planner|dev-fe|dev-be|tester|infra>`: seed thêm 1 lớp CLAUDE.md + settings + rules cho từng vai trò trong quy trình delivery, cộng thêm vai trò `infra` tổng quát cho hạ tầng của cả fleet, chồng lên base. Bỏ trống = mặc định như cũ (xem mục dưới).
-- **v1.7.2**: bật channels ở tầng managed settings — bake `/etc/claude-code/managed-settings.json` với `channelsEnabled:true` + allowlist plugin Telegram, fix lỗi "Channels are not enabled for your org" của Claude Code v2.1+. Thêm `.gitattributes` ép LF cho shell/Dockerfile. (PR #3 by @khanhn87)
-- **v1.7.1**: gỡ bỏ tool `rtk` bake sẵn trong image cùng PreToolUse hook của nó — `rtk` vốn là công cụ tối ưu token cá nhân trên máy chủ owner, bake nhầm vào image; binary x86_64/glibc-2.39 fail trên container arm64, gây spam lỗi hook PreToolUse (không chặn) ở mọi lệnh Bash. `SessionStart` hook (`tg-session-context`) vẫn giữ nguyên.
+Từ v2.2, image **bỏ hẳn `claude --channels`** (poller của CLI channel-host hay chết lúc start/restart). Thay vào đó là **một worker Python dùng Bot API** (`scripts/tg-worker.py`) làm tiến trình chính của container: nó tự long-poll `getUpdates`, và với mỗi tin thì gọi headless `claude -p` một lần. Ưu điểm:
 
-## Bắt đầu nhanh (dùng image đã publish — khỏi build, khỏi clone)
+- **Ổn định**: worker tự làm chủ vòng poll, không phụ thuộc CLI channel-host hay bị kẹt ô nhập.
+- **Nhẹ ~20x lúc rảnh** (~13MB vs ~280MB); không tmux, không cron.
+- **Luôn dùng subscription** (worker gỡ `ANTHROPIC_API_KEY` → không tốn tiền theo token).
+- **Mở khoá tính năng mới**: nhắc lịch (cron/reminders) + hỏi-lại-qua-Telegram.
+
+**Breaking**: layout đổi sang **một volume `~/.claude` duy nhất**; không tương thích ngược volume `/data` của v1.x. Ship dưới tag riêng **`:v2.2.0`** (KHÔNG đụng `:latest`). Migrate = cài mới sạch (xem [Di trú](#di-trú-từ-v1x-sang-v22-cài-mới-sạch)). Rollback = quay lại image v1.x cũ.
+
+## Tính năng
+
+- **Worker Bot-API** (`tg-worker.py`, stdlib thuần): getUpdates long-poll → cổng access.json (DM + nhóm) → react 👀 → `claude -p` (json) → sendMessage (chunk ≤3800, quote-reply trong nhóm) → parse `[[react:X]]`; giữ session theo từng `chat_id` (`--resume`). Không crash vòng lặp; log ở `~/.claude/telegram/worker.log`.
+- **Nhắc lịch / reminders**: một luồng scheduler trong worker quét `~/.claude/workspace/reminders/*.json` mỗi ~45s và bắn khi tới hạn (`mode:text` → gửi thẳng; `mode:claude` → chạy một lượt `claude -p` rồi gửi kết quả). One-off hoặc lặp daily/weekly, theo giờ container (Asia/Ho_Chi_Minh). CLI: `tg-reminder add|list|remove`.
+- **Hỏi-lại qua Telegram**: khi cần owner quyết, Claude GỬI câu hỏi như một reply rồi KẾT THÚC lượt; tin kế tiếp của owner là câu trả lời, phiên tiếp tục nhờ `--resume` (không AskUserQuestion, không chờ terminal). Ép bằng rule trong CLAUDE.md.
+- **Quyền an toàn theo mặc định**: `--allowedTools` mặc định = `mcp__mempalace,Read,Grep,Glob,WebFetch,WebSearch` — **KHÔNG có Bash tự do** (an toàn cho bot đứng trong nhóm, chống prompt-injection). Bot cá nhân tin cậy nới thêm qua `TG_WORKER_ALLOWED_TOOLS`. `PERMISSION_MODE`/`TG_WORKER_PERMISSION_MODE` map sang `--permission-mode` hợp lệ (`auto`→`acceptEdits`).
+- **Quy tắc nền bake sẵn** (`default-CLAUDE.md` → `~/.claude/CLAUDE.md`): chỉ nghe owner, phát hiện prompt-injection + cảnh báo, cách ly ngữ cảnh giữa các nhóm/DM, bắt xác nhận việc phá hoại, giọng trả lời lịch sự (ghi đè caveman), + quy tắc worker (câu trả lời cuối = tin gửi cho owner) + hỏi-lại-qua-Telegram + quản lý reminder.
+- **Bộ não thứ hai `.workspace/{rules,memory,events,status}`** tạo sẵn trong work dir; SessionStart hook nạp lại mỗi lượt `claude -p`; đồng bộ tuỳ chọn với mempalace.
+- **`permissions` bake sẵn** trong settings.json (chặn đọc secret + circuit-breaker phá hoại; cho git read-only + `gh`).
+- **`gh` CLI bake sẵn** cho thao tác GitHub. **TZ=Asia/Ho_Chi_Minh** + **UTF-8** (`LANG=C.UTF-8`).
+- **Chạy dưới root** nếu cần: `-e BOT_USER=root -e BOT_HOME=/root`.
+- **Công cụ vận hành**: `bot-doctor` (check tiến trình worker / heartbeat / quyền / poller drain / login / reminders) + `tg-healthcheck` gắn HEALTHCHECK (worker sống + heartbeat tươi).
+- **Biến thể `:v2.2.0-playwright`** cho bot cần render UI + chụp màn hình (build FROM base v2.2.0).
+- **Bot chuyên trách (role profiles)** qua `-e BOT_ROLE=<ba|planner|dev-fe|dev-be|tester|infra>` — layer thêm CLAUDE.md + settings + rules; bỏ trống = mặc định.
+
+## Bắt đầu nhanh (image v2.2.0 đã publish)
 
 ```bash
 docker run -d --name mybot \
   -e TELEGRAM_BOT_TOKEN=<lấy từ @BotFather> \
   -e OWNER_ID=<Telegram user_id của bạn> \
-  -v botdata:/data \
+  -e CLAUDE_CODE_OAUTH_TOKEN=<tạo bằng: claude setup-token> \
+  -v mybot-claude:/home/botuser/.claude \
   --restart unless-stopped \
-  ghcr.io/trongnguyenbinh/claude-telegram-docker:latest
-
-# Xác thực Claude một lần — ĐĂNG NHẬP TƯƠNG TÁC, chạy AS botuser (user bot chạy):
-docker exec -it -u botuser mybot claude auth login
-#   → mở URL in ra, authorize, dán mã. Creds lưu vào /data/.claude (trên volume)
-#     → sống qua restart, KHÔNG cần recreate.
-#   ⚠️ PHẢI có -u botuser để creds thuộc botuser; thiếu nó login vào user root → bot đọc không ra.
-docker exec -u botuser mybot claude auth status   # loggedIn:true
-# (Tuỳ chọn thay thế: -e ANTHROPIC_API_KEY / -e CLAUDE_CODE_OAUTH_TOKEN vẫn dùng được.)
+  ghcr.io/trongnguyenbinh/claude-telegram-docker:v2.2.0
 ```
 
-Xong. Kiểm tra trạng thái / quản lý quyền truy cập:
+Worker là daemon headless — **KHÔNG cần `-it`/PTY** (khác `--channels` cũ). Xác thực dùng **subscription**: cấp `CLAUDE_CODE_OAUTH_TOKEN` (khuyến nghị, tạo một lần bằng `claude setup-token`), hoặc đăng nhập tương tác một lần (creds lưu trên volume `~/.claude`):
 
 ```bash
-docker exec -u botuser mybot claude auth status
+docker exec -it -u botuser mybot claude auth login
+docker exec -u botuser mybot claude auth status   # loggedIn:true
+```
+
+> ⚠️ `ANTHROPIC_API_KEY` bị worker **cố ý bỏ qua** (ép dùng subscription). Đừng dựa vào nó để auth.
+
+Kiểm tra / quản lý quyền truy cập:
+
+```bash
+docker exec -u botuser mybot bot-doctor
 docker exec -u botuser mybot tg-access status
 docker exec -u botuser mybot tg-access group add <group-id>
 ```
-> ⚠️ Chạy `tg-access` (và `claude ...`) với **`-u botuser`**. Bot chạy non-root
-> (botuser) và `access.json` thuộc botuser; chạy tg-access bằng root thì thay đổi
-> KHÔNG lưu được (bị server ghi đè) — group/allow add xong mà `status` vẫn trống.
+> ⚠️ Chạy `tg-access` (và `claude ...`) với **`-u botuser`** (bot chạy non-root; chạy bằng root thì file trong `~/.claude` bị root chiếm).
 
-## Xem bot đang làm gì (monitor session)
+## Xem bot đang làm gì
 
-`claude --channels` chạy trong một **tmux session tên `claude`**. Hai cách theo dõi:
+Không còn tmux. Theo dõi qua log worker + transcript:
 
-**1) Attach vào tmux session** — thấy trực tiếp phiên claude live:
 ```bash
-docker exec -it -u botuser mybot tmux attach -t claude
-```
-> Thoát an toàn bằng **Ctrl+B rồi D** (detach — bot vẫn chạy bình thường, tmux không bị giết). Đây là lý do dùng tmux: an toàn hơn `docker attach` (vốn dễ lỡ Ctrl+C làm tắt bot).
-> Nhớ `-u botuser` (session thuộc user botuser).
-
-**2) Đọc transcript** — bản ghi từng phiên (JSONL: claude nghĩ gì, gọi tool nào):
-```bash
-docker exec mybot sh -c 'ls -t /data/.claude/projects/*/*.jsonl | head'
-docker exec mybot sh -c 'tail -f /data/.claude/projects/*/*.jsonl'
+docker logs --tail 40 mybot
+docker exec -u botuser mybot sh -c 'tail -f /home/botuser/.claude/telegram/worker.log'
+# transcript từng lượt claude -p (JSONL):
+docker exec -u botuser mybot sh -c 'tail -f /home/botuser/.claude/projects/*/*.jsonl'
 ```
 
-Image được GitHub Actions publish lên GHCR mỗi lần push vào `main` và mỗi tag `v*`
-(`.github/workflows/docker-publish.yml`, linux/amd64 + arm64).
-
-## Hoặc build tại máy (cho phát triển)
+## Build tại máy (phát triển)
 
 ```bash
-cp .env.example .env      # điền TELEGRAM_BOT_TOKEN + OWNER_ID
+cp .env.example .env      # điền TELEGRAM_BOT_TOKEN + OWNER_ID + CLAUDE_CODE_OAUTH_TOKEN
 docker compose up -d --build
-# xác thực một lần — đăng nhập tương tác AS botuser (creds lưu trên volume):
-docker exec -it -u botuser claude-tg-bot claude auth login
-docker exec -u botuser claude-tg-bot claude auth status   # loggedIn:true
+docker exec -u botuser claude-tg-bot bot-doctor
 ```
-
-> **Permission mode:** mặc định `auto` (Auto Mode có classifier) — chạy headless không treo, không hỏi vặt mà vẫn chặn hành động rủi ro; hợp bot. `acceptEdits` chỉ tự duyệt file-edit, VẪN hỏi ở mọi lệnh Bash.
-> Container chạy non-root (`botuser`): entrypoint khởi động bằng root chỉ để `chown`
-> volume rồi hạ quyền xuống botuser (gosu) trước khi chạy `claude --channels`.
->
-> ⚠️ **bypassPermissions** (tự chạy MỌI tool không hỏi) KHÔNG chạy được headless: Claude
-> Code 2.1.126+ bắt xác nhận hộp thoại "Yes, I accept" mỗi lần start, không có cách skip
-> tự động → bot sẽ TREO. Nếu cần, phải bấm tay: `docker exec -it -u botuser <bot> tmux
-> attach -t claude` → ↓ chọn "Yes, I accept" → Enter → Ctrl+B D (và lặp lại khi volume mới).
->
-> **Đăng nhập** dùng `claude auth login` (tương tác), creds lưu vào `/data/.claude`
-> trên volume → sống qua restart, login một lần. Nhớ `-u botuser` để creds thuộc đúng
-> user bot chạy.
 
 ## Cách hoạt động
 
-- **Base** `debian:bookworm-slim` + `bun` (plugin telegram chạy MCP server bằng bun) + Claude Code CLI (native installer) + plugin telegram bake sẵn trong image.
-- **`entrypoint.sh`** (lần chạy đầu): seed plugin đã bake vào volume, ghi bot token, và seed `access.json` thành **`allowlist` với `allowFrom=[OWNER_ID]`** (chỉ owner, không pairing). Sau đó `exec claude --channels plugin:telegram@claude-plugins-official`.
-- **State nằm trên volume** (`/data`): config + credentials Claude (`/data/.claude`) và state telegram (`/data/telegram`: token, `access.json`). Sống qua restart; đăng nhập chỉ một lần.
-- **Quản trị qua `docker exec tg-access …`** (host = kênh đã xác thực). Không bao giờ đổi quyền truy cập từ một tin nhắn Telegram.
+- **Base** `debian:bookworm-slim` + `bun` + Claude Code CLI (native installer) + `python3` (runtime worker). **Không** cài plugin telegram.
+- **`entrypoint.sh`** (chạy dưới root): seed config bake sẵn vào volume `~/.claude` **lần đầu (cài mới sạch, KHÔNG migrate copy)**, seed token + `access.json` (`allowlist`, `allowFrom=[OWNER_ID]`), `unset ANTHROPIC_API_KEY`, rồi `exec gosu botuser python3 tg-worker.py`.
+- **State trên một volume `~/.claude`**: `settings.json`/`CLAUDE.md`/`plugins/`/creds; `telegram/` (token, `access.json`, `sessions/`, `worker.log`); `workspace/` (cwd, `reminders/`, `.workspace/`).
+- **Quản trị qua `docker exec tg-access …`** (host = kênh đã xác thực). Không bao giờ đổi quyền từ tin Telegram.
 
 ## Biến môi trường
 
 | Biến | Bắt buộc | Ghi chú |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | ✅ | lấy từ @BotFather |
-| `OWNER_ID` | ✅ | Telegram user_id của bạn (1 owner duy nhất) |
-| `CLAUDE_CODE_OAUTH_TOKEN` | khuyến nghị | xác thực headless — tạo một lần bằng `claude setup-token`, dán vào đây. Sống sót khi xoá volume. |
-| `PERMISSION_MODE` | tuỳ chọn | `auto`/`default`/`acceptEdits`/`bypassPermissions`/`manual`/`plan`. **Bỏ trống = `auto`** — Auto Mode có classifier: tự duyệt hành động an toàn, chặn hành động rủi ro/production → bot chạy nền không treo mà vẫn an toàn. Override khi cần, vd `acceptEdits`. |
-| `BOT_ROLE` | tuỳ chọn | Bot chuyên trách: `ba`/`planner`/`dev-fe`/`dev-be`/`tester`/`infra`. Seed CLAUDE.md + settings + rules của vai trò (layer trên base) ở lần chạy đầu. **Bỏ trống / `default` = hành vi mặc định như cũ.** Xem [Bot chuyên trách](#bot-chuyên-trách-role-profiles) + `roles/README.md`. |
-| `WORK_DIR` | tuỳ chọn | thư mục claude của bot chạy trong đó (file ops rơi vào đây, đã pre-trust). Mặc định `/working-directory/claude-telegram-bot`; lưu trên volume `botwork`. |
-| `ANTHROPIC_API_KEY` | dự phòng | trả tiền theo token thay vì dùng subscription |
-| `MODEL` / `TZ` | tuỳ chọn | |
+| `OWNER_ID` | ✅ | Telegram user_id của bạn (1 owner) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | khuyến nghị | xác thực headless (subscription) — tạo bằng `claude setup-token`. Sống sót khi xoá volume. |
+| `TG_WORKER_ALLOWED_TOOLS` | tuỳ chọn | comma-list cho `--allowedTools`. Mặc định `mcp__mempalace,Read,Grep,Glob,WebFetch,WebSearch` (KHÔNG Bash). Nới cho bot cá nhân tin cậy. |
+| `TG_WORKER_PERMISSION_MODE` | tuỳ chọn | `--permission-mode` của worker (`default`/`acceptEdits`/`bypassPermissions`/`plan`). Không set → lấy `PERMISSION_MODE`. |
+| `PERMISSION_MODE` | tuỳ chọn | Alias: `auto`→`acceptEdits`, `manual`→`default`, rỗng→`acceptEdits`. |
+| `MODEL` | tuỳ chọn | vd `sonnet` |
+| `TZ` | tuỳ chọn | mặc định `Asia/Ho_Chi_Minh` — scheduler nhắc lịch bắn theo giờ này |
+| `BOT_ROLE` | tuỳ chọn | `ba`/`planner`/`dev-fe`/`dev-be`/`tester`/`infra`; bỏ trống = mặc định |
+| `WORK_DIR` / `CLAUDE_CONFIG_DIR` / `TELEGRAM_STATE_DIR` | tuỳ chọn | mặc định layout `~/.claude` |
+
+## Nhắc lịch (reminders)
+
+Owner nói "nhắc anh 8h sáng mai họp" / "mỗi thứ 2 9h nhắc report" → Claude dùng `tg-reminder` tạo reminder; scheduler trong worker bắn khi tới hạn (giờ container).
+
+```bash
+tg-reminder add --chat <chat_id> --text "Uống nước" --daily 15:00
+tg-reminder add --chat <chat_id> --prompt "Tóm tắt tin AI hôm nay" --weekly mon 09:00
+tg-reminder add --chat <chat_id> --text "Họp team" --at 2026-07-20T08:00
+tg-reminder list
+tg-reminder remove <id>
+```
+`--text` = gửi thẳng chuỗi; `--prompt` = chạy một lượt `claude -p` rồi gửi output (nội dung động). Đúng một trong `--text`/`--prompt`, đúng một lịch (`--at`/`--daily`/`--weekly`).
+
+## Di trú từ v1.x sang v2.2 (cài mới sạch)
+
+v2.2 KHÔNG migrate volume `/data` cũ (copy sẽ vỡ đường dẫn plugin). Mỗi bot làm mới:
+
+```bash
+# 1) tạo volume ~/.claude mới, chạy container trên :v2.2.0 (giữ token + owner)
+docker run -d --name <bot> --restart unless-stopped \
+  -e TELEGRAM_BOT_TOKEN=<token> -e OWNER_ID=<id> \
+  -e CLAUDE_CODE_OAUTH_TOKEN=<oauth> -e MODEL=sonnet \
+  -v <bot>-claude:/home/botuser/.claude \
+  ghcr.io/trongnguyenbinh/claude-telegram-docker:v2.2.0
+# 2) cắm lại mempalace MCP (token riêng từng bot)
+docker exec -u botuser <bot> claude mcp add --scope user --transport http mempalace \
+  https://<domain>/mcp --header "Authorization: Bearer <token>"
+docker restart <bot>
+# 3) bật nhóm (chủ tự chạy ở terminal)
+docker exec -u botuser <bot> tg-access group add <groupId>
+```
+Rollback = giữ nguyên container/volume v1.x cũ (đừng xoá cho tới khi v2.2 chạy ổn).
 
 ## Lưu ý (gotchas)
 
-- `claude --channels` là TUI tương tác → container cần PTY (`tty: true` + `stdin_open: true`, đã set sẵn trong compose; dùng `-it` với `docker run`).
-- **Một token = một container.** Telegram chỉ cho một poller `getUpdates` mỗi token; hai container cùng token → lỗi 409 conflict.
-- Đổi token thì phải restart container (token chỉ đọc một lần lúc boot).
-- **Poller kẹt sau recreate:** verify `pending_update_count` về 0 (dùng `bot-doctor`); nếu poller đứng (1 tin kẹt ô nhập) → `docker restart <bot>` là thông.
-- **`permissions` bake chỉ seed volume MỚI** — bot cũ phải merge tay vào `/data/.claude/settings.json` rồi restart.
-- **Network phụ (vd `db-shared`) KHÔNG được giữ khi recreate trơn** → thêm `--network <net>` vào `docker run`.
+- **Một token = một container.** Telegram chỉ cho một poller `getUpdates`/token → hai container cùng token = 409 conflict.
+- Đổi token thì restart container (worker đọc token một lần lúc boot).
+- **Chỉ mount `~/.claude`**, đừng mount cả `/home/botuser` (sẽ che mất binary `claude`/`bun` trong layer image).
+- **Bot đứng trong nhóm**: giữ `TG_WORKER_ALLOWED_TOOLS` mặc định (không Bash) để an toàn injection.
 - Chi tiết + playbook: [`OPERATIONS.md`](./OPERATIONS.md).
 
 ## tg-access
-
-Quản trị quyền truy cập. **Luôn chạy với `-u botuser`** (xem cảnh báo ở trên):
-`docker exec -u botuser <bot> tg-access <lệnh>`. Thay đổi có hiệu lực NGAY (access.json
-đọc lại mỗi tin, không cần restart).
 
 ```
 tg-access status
@@ -140,45 +156,29 @@ tg-access pair <code>
 
 ## Bot chuyên trách (role profiles)
 
-Một bot có thể khởi động ở một **vai trò** trong quy trình delivery bằng AI (Define/BA → Planning → Build → Tester/QA) qua biến `BOT_ROLE`. Mỗi vai trò seed thêm 1 lớp CLAUDE.md "cách làm việc" + `settings-fragment` + rules, **layer chồng lên** base CLAUDE.md (bảo mật, cách ly thông tin, `.workspace`, giọng trả lời vẫn là nền chung). Nội dung role là chuẩn nghề tổng quát bằng tiếng Anh — phần glue riêng dự án (issue tracker, kênh, quy ước của bạn) đặt ở lớp overlay per-bot.
+Bỏ trống = mặc định. Chi tiết: [`roles/README.md`](./roles/README.md).
 
 | `BOT_ROLE` | Giai đoạn | Bot làm gì |
 |---|---|---|
-| `ba` | Define | Khai thác + làm rõ yêu cầu, viết user story + acceptance criteria + spec gọn, dựng prototype UI → preview deploy; sign-off → tạo work item + sync shared knowledge base + publish handoff. |
-| `planner` | Planning | Phân rã item cha → sub-task theo mảng (`area:frontend/backend/db/infra/qa`) + estimate + link cha → board → publish + @mention. |
-| `dev-fe` | Build (FE) | Nhặt sub-task `area:frontend` → branch → code UI → PR `Closes #issue`; biết gate chất lượng + security; frontend-design + preview deploy + Playwright. |
-| `dev-be` | Build (BE) | Nhặt sub-task `area:backend` → branch → code API/DB + migration → PR `Closes #issue`; ý thức migration/db + gate. |
-| `tester` | Tester/QA | Từ release notes hướng dẫn test + tạo test case; nhận bug report từ test site → đối chiếu spec → nghi bug thật thì publish channel + tag lead. |
-| `infra` | Ops (xuyên suốt) | Agent DevOps/infra tổng quát cho fleet bot + service dùng chung: deploy/recreate/update bot (giữ nguyên env), triage health/logs, chỉnh config service, kiểm kê → shared memory. Chỉ nghe owner; BẮT BUỘC xác nhận rõ ràng trước hành động phá hoại; không bao giờ in secret; audit mọi hành động. |
+| `ba` | Define | Làm rõ yêu cầu, user story + acceptance criteria + spec gọn, prototype UI → preview; sign-off → tạo work item + sync KB + handoff. |
+| `planner` | Planning | Phân rã item cha → sub-task theo mảng + estimate + link → board → publish. |
+| `dev-fe` | Build (FE) | Nhặt `area:frontend` → branch → code UI → PR `Closes #issue`. |
+| `dev-be` | Build (BE) | Nhặt `area:backend` → branch → code API/DB + migration → PR. |
+| `tester` | Tester/QA | Từ release notes viết test case; nhận bug → đối chiếu spec → publish + tag lead. |
+| `infra` | Ops | Agent DevOps cho fleet: deploy/recreate/update bot, triage health/logs. Chỉ nghe owner; xác nhận trước hành động phá hoại; không in secret. |
 
-**Bỏ trống / không đặt / `default` = hành vi mặc định như cũ, KHÔNG đổi gì** (bot hiện có không bị ảnh hưởng). Role không hợp lệ → entrypoint log cảnh báo rồi chạy như mặc định.
+## Biến thể `:v2.2.0-playwright` (render UI + chụp màn hình)
 
-```bash
-# ví dụ: khởi động bot BA
-docker run -d --name mybot-ba \
-  -e TELEGRAM_BOT_TOKEN=<token> -e OWNER_ID=<id> -e BOT_ROLE=ba \
-  -v mybot-ba-data:/data --restart unless-stopped \
-  ghcr.io/trongnguyenbinh/claude-telegram-docker:latest
-```
-
-> CLAUDE.md của vai trò chỉ seed khi work-dir CHƯA có CLAUDE.md (không đè file riêng của bot). Phần `settings-fragment` là union (chạy lại vô hại). Cách thêm vai trò mới: xem [`roles/README.md`](./roles/README.md).
-
-## Biến thể `:playwright` (render UI + chụp màn hình)
-
-Cho bot cần chạy trình duyệt (dựng UI, chụp screenshot). Biến thể này = image nền + Node 20 thật + Chromium + Playwright (nặng hơn ~1GB, **chỉ amd64**). Build bằng `Dockerfile.playwright`, publish tag `:playwright`.
-
-Cấp Playwright cho một bot:
+Base v2.2.0 + Node 20 thật + Chromium + Playwright (nặng ~1GB, **chỉ amd64**). Cấp cho một bot:
 
 ```bash
-# 1) Chạy / recreate bot bằng image :playwright (giữ nguyên volume + env như thường)
-ghcr.io/trongnguyenbinh/claude-telegram-docker:playwright
-
-# 2) Cắm Playwright MCP bằng BINARY đã bake (KHÔNG dùng npx — npx tải lại package mỗi lần start → lỗi kết nối)
+# chạy/recreate bot trên image :v2.2.0-playwright (giữ volume + env)
 docker exec -u botuser <bot> claude mcp add --scope user playwright -- playwright-mcp --headless
 docker restart <bot>
+# nới allowedTools để bot dùng được browser:
+#   -e TG_WORKER_ALLOWED_TOOLS="mcp__mempalace,mcp__playwright,Read,Grep,Glob,WebFetch,WebSearch"
 ```
-
-> ⚠️ Phải dùng `playwright-mcp --headless` (binary global đã bake), KHÔNG dùng `npx @playwright/mcp@latest` (tải lại mỗi lần boot → MCP "Failed to connect" + có thể kẹt poller).
+> ⚠️ Dùng `playwright-mcp --headless` (binary bake sẵn), KHÔNG dùng `npx @playwright/mcp@latest`.
 
 ## Giấy phép
 

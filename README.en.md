@@ -5,82 +5,86 @@
 Run a Claude-Code-powered Telegram bot as a single container. **1 image = 1 bot.**
 Full design: [`SPEC.md`](./SPEC.md). Quick command table: [`CHEATSHEET.md`](./CHEATSHEET.md). Operations & troubleshooting: [`OPERATIONS.md`](./OPERATIONS.md).
 
-## Features (v1.7.2)
+## v2.2 — "worker" transport (replaces `--channels`)
 
-- **Baked base rules** (`default-CLAUDE.md` → `/data/.claude/CLAUDE.md`, user-level memory; each bot's work-dir CLAUDE.md layers on top): owner-only authority, prompt-injection detection + owner alert, information isolation (never leak owner DM content, never carry context across groups/DMs), destructive-op confirmation, a polite reply tone that **overrides** caveman/terse mode for user-facing replies, and a reply self-check (did I actually call the reply tool?). Generic, English, project-neutral — supply project-specific glue in your own per-bot overlay.
-- **Second-brain `.workspace/{rules,memory,events,status}`** skeleton created in the work dir on first run; conventions live in the base rules; optionally syncs with a shared memory MCP (e.g. mempalace).
-- **Baked `permissions`** in settings.json: deny reading secrets (`.env`/`secrets`/keys, cwd-anchored so the bot's own `/data` token is not blocked) + destructive circuit-breakers; allow routine read-only git + `gh`.
-- **`gh` CLI + `cron` baked in**: use `gh` for GitHub (auth via `-e GH_TOKEN=<PAT>` + `gh auth setup-git`; the github MCP plugin is broken — use gh); cron daemon started for scheduled reminders.
-- **Auto Mode by default** (`PERMISSION_MODE=auto`, classifier-gated) → the bot doesn't prompt yet still blocks risky actions. (`acceptEdits` still prompts on every Bash command.)
-- **UTF-8** (`LANG=C.UTF-8` + `tmux -u`) so non-ASCII text (e.g. Vietnamese, CJK) renders correctly in the attached session.
-- **Run as root** (no image change): `-e BOT_USER=root -e BOT_HOME=/root`.
-- **Ops tooling**: `bot-doctor` (`docker exec <bot> bot-doctor` — checks tmux session / permission mode / poller pending-drain / locale / base CLAUDE.md / .workspace / login + prints the fix) and `tg-healthcheck` wired as a Docker HEALTHCHECK (marks the container `unhealthy` if the tmux `claude` session dies). Playbook + gotchas in [`OPERATIONS.md`](./OPERATIONS.md).
-- **`:playwright` variant** for bots that render UI + screenshot (see below).
-- **Role profiles** via `-e BOT_ROLE=<ba|planner|dev-fe|dev-be|tester|infra>`: layer a role-specific CLAUDE.md + settings + rules on top of the base for each stage of the delivery workflow, plus a generic `infra` ops role for the fleet itself. Unset = unchanged default behavior (see below).
-- **v1.7.2**: enable channels via managed settings — bake `/etc/claude-code/managed-settings.json` with `channelsEnabled:true` + the Telegram plugin allowlisted, fixing the Claude Code v2.1+ "Channels are not enabled for your org" gate. Add `.gitattributes` enforcing LF for shell/Dockerfile. (PR #3 by @khanhn87)
-- **v1.7.1**: removed the baked `rtk` tool and its PreToolUse hook — `rtk` was the owner's personal host-only token optimizer, mistakenly baked into the image; its x86_64/glibc-2.39 binary fails on arm64 containers, spamming non-blocking PreToolUse hook errors on every Bash call. The `SessionStart` hook (`tg-session-context`) is unaffected and stays.
+As of v2.2 the image **drops `claude --channels` entirely** (the CLI channel-host poller kept failing to start on container start/restart). In its place is **a Python Bot-API worker** (`scripts/tg-worker.py`) as the container's main process: it long-polls `getUpdates` itself and, per message, invokes headless `claude -p` once. Upsides:
 
-## Quick start (from the published image — no build, no clone)
+- **Stable**: the worker owns its own poll loop — no dependency on the CLI channel-host, no stuck input box.
+- **~20x lighter at idle** (~13MB vs ~280MB); no tmux, no cron daemon.
+- **Always on the subscription** (the worker pops `ANTHROPIC_API_KEY` → no per-token cost).
+- **Unlocks new features**: reminders (cron) + questions-to-Telegram.
+
+**Breaking**: the layout changes to **a single `~/.claude` volume**; not backward-compatible with the v1.x `/data` volume. Shipped under a distinct tag **`:v2.2.0`** (it does NOT move `:latest`). Migration = a clean fresh install (see [Migration](#migration-from-v1x-to-v22-clean-install)). Rollback = the old v1.x image.
+
+## Features
+
+- **Bot-API worker** (`tg-worker.py`, pure stdlib): getUpdates long-poll → access.json gate (DM + groups) → react 👀 → `claude -p` (json) → sendMessage (chunk ≤3800, quote-reply in groups) → parse `[[react:X]]`; keeps a session per `chat_id` (`--resume`). No crashing loop; logs at `~/.claude/telegram/worker.log`.
+- **Reminders**: a scheduler thread inside the worker scans `~/.claude/workspace/reminders/*.json` every ~45s and fires them when due (`mode:text` → send directly; `mode:claude` → run one `claude -p` turn and send the result). One-off or recurring daily/weekly, in the container timezone (Asia/Ho_Chi_Minh). CLI: `tg-reminder add|list|remove`.
+- **Questions-to-Telegram**: when it needs the owner to decide, Claude SENDS the question as a reply and ENDS the turn; the owner's next message is the answer, and the session resumes via `--resume` (no AskUserQuestion, no terminal wait). Enforced by a rule in CLAUDE.md.
+- **Safe-by-default permissions**: default `--allowedTools` = `mcp__mempalace,Read,Grep,Glob,WebFetch,WebSearch` — **no free Bash** (safe for a group-exposed bot, hardened against prompt injection). Trusted personal bots widen it via `TG_WORKER_ALLOWED_TOOLS`. `PERMISSION_MODE`/`TG_WORKER_PERMISSION_MODE` map to a valid `--permission-mode` (`auto`→`acceptEdits`).
+- **Baked base rules** (`default-CLAUDE.md` → `~/.claude/CLAUDE.md`): owner-only authority, prompt-injection detection + owner alert, information isolation across groups/DMs, destructive-op confirmation, a polite reply tone (overrides caveman), + worker rules (the final answer = the message sent to the owner) + questions-to-Telegram + reminder management.
+- **Second-brain `.workspace/{rules,memory,events,status}`** created in the work dir; a SessionStart hook reloads it on every `claude -p` turn; optionally syncs with mempalace.
+- **Baked `permissions`** in settings.json (deny reading secrets + destructive circuit-breakers; allow read-only git + `gh`).
+- **`gh` CLI baked in** for GitHub operations. **TZ=Asia/Ho_Chi_Minh** + **UTF-8** (`LANG=C.UTF-8`).
+- **Run as root** if needed: `-e BOT_USER=root -e BOT_HOME=/root`.
+- **Ops tooling**: `bot-doctor` (checks the worker process / heartbeat freshness / permission + tools env / poller drain / login / reminders) + `tg-healthcheck` wired as HEALTHCHECK (worker alive + heartbeat fresh).
+- **`:v2.2.0-playwright` variant** for bots that render UI + screenshot (built FROM base v2.2.0).
+- **Role profiles** via `-e BOT_ROLE=<ba|planner|dev-fe|dev-be|tester|infra>` — layer a role-specific CLAUDE.md + settings + rules; unset = default.
+
+## Quick start (published `:v2.2.0` image)
 
 ```bash
 docker run -d --name mybot \
   -e TELEGRAM_BOT_TOKEN=<from @BotFather> \
   -e OWNER_ID=<your Telegram user_id> \
-  -v botdata:/data \
+  -e CLAUDE_CODE_OAUTH_TOKEN=<generate with: claude setup-token> \
+  -v mybot-claude:/home/botuser/.claude \
   --restart unless-stopped \
-  ghcr.io/trongnguyenbinh/claude-telegram-docker:latest
-
-# one-time Claude auth — generate a token (uses your Claude subscription):
-docker exec -it mybot claude setup-token
-#   → opens a URL, authorize, paste the FULL code; it PRINTS a long-lived token.
-# Put that token in the container env and recreate:
-#   add  CLAUDE_CODE_OAUTH_TOKEN=<token>  to your -e flags / .env, then:
-docker rm -f mybot && docker run -d --name mybot \
-  -e TELEGRAM_BOT_TOKEN=<token> -e OWNER_ID=<id> \
-  -e CLAUDE_CODE_OAUTH_TOKEN=<the-token-from-setup-token> \
-  -v botdata:/data --restart unless-stopped \
-  ghcr.io/trongnguyenbinh/claude-telegram-docker:latest
-#   (env token = headless auth, survives volume wipes. `claude auth login` tends
-#    to 400 in a container — no real browser / PKCE state mismatch.)
-docker exec mybot claude auth status   # loggedIn:true
+  ghcr.io/trongnguyenbinh/claude-telegram-docker:v2.2.0
 ```
 
-That's it. Check status / manage access:
+The worker is a headless daemon — **no `-it`/PTY needed** (unlike the old `--channels`). Auth uses the **subscription**: provide `CLAUDE_CODE_OAUTH_TOKEN` (recommended, generate once with `claude setup-token`), or log in interactively once (creds persist on the `~/.claude` volume):
 
 ```bash
-docker exec mybot claude auth status
-docker exec mybot tg-access status
-docker exec mybot tg-access group add <group-id>
+docker exec -it -u botuser mybot claude auth login
+docker exec -u botuser mybot claude auth status   # loggedIn:true
 ```
 
-The image is published to GHCR by GitHub Actions on every push to `main` and on
-every `v*` tag (`.github/workflows/docker-publish.yml`, linux/amd64 + arm64).
+> ⚠️ `ANTHROPIC_API_KEY` is **intentionally ignored** by the worker (forces the subscription). Don't rely on it for auth.
 
-## Build locally instead (for development)
+Check / manage access:
 
 ```bash
-cp .env.example .env      # fill TELEGRAM_BOT_TOKEN + OWNER_ID
+docker exec -u botuser mybot bot-doctor
+docker exec -u botuser mybot tg-access status
+docker exec -u botuser mybot tg-access group add <group-id>
+```
+> ⚠️ Run `tg-access` (and `claude ...`) with **`-u botuser`** (the bot runs non-root; running as root lets root own files under `~/.claude`).
+
+## See what the bot is doing
+
+No more tmux. Follow the worker log + transcript:
+
+```bash
+docker logs --tail 40 mybot
+docker exec -u botuser mybot sh -c 'tail -f /home/botuser/.claude/telegram/worker.log'
+# per-turn claude -p transcript (JSONL):
+docker exec -u botuser mybot sh -c 'tail -f /home/botuser/.claude/projects/*/*.jsonl'
+```
+
+## Build locally (development)
+
+```bash
+cp .env.example .env      # fill TELEGRAM_BOT_TOKEN + OWNER_ID + CLAUDE_CODE_OAUTH_TOKEN
 docker compose up -d --build
-# one-time auth — PRINTS a token (does NOT persist it on its own):
-docker exec -it claude-tg-bot claude setup-token
-#   → open the URL, authorize, paste the FULL code; it prints a long-lived token.
-# Put that token in .env, then RECREATE (not `restart` — restart won't reload env):
-#   add  CLAUDE_CODE_OAUTH_TOKEN=<the-printed-token>  to .env, then:
-docker compose up -d
-docker exec claude-tg-bot claude auth status   # loggedIn:true
+docker exec -u botuser claude-tg-bot bot-doctor
 ```
-
-> Gotcha: `setup-token` only *prints* a headless token (`Use this token by setting:
-> export CLAUDE_CODE_OAUTH_TOKEN=...`). It does **not** write credentials to the
-> volume, so `docker compose restart` alone leaves `loggedIn:false`. The token must
-> go into `.env` (`CLAUDE_CODE_OAUTH_TOKEN`) and the container must be **recreated**
-> (`docker compose up -d`) so the env is re-read.
 
 ## How it works
 
-- **Base** `debian:bookworm-slim` + `bun` (the telegram plugin runs its MCP server with bun) + the Claude Code CLI (native installer) + the telegram plugin baked in.
-- **`entrypoint.sh`** (first run): seeds the baked plugin onto the volume, writes the bot token, and seeds `access.json` as **`allowlist` with `allowFrom=[OWNER_ID]`** (owner-only, no pairing). Then `exec claude --channels plugin:telegram@claude-plugins-official`.
-- **State on a volume** (`/data`): Claude config + credentials (`/data/.claude`) and telegram state (`/data/telegram`: token, `access.json`). Survives restarts; login is one-time.
+- **Base** `debian:bookworm-slim` + `bun` + the Claude Code CLI (native installer) + `python3` (the worker runtime). The telegram plugin is **not** installed.
+- **`entrypoint.sh`** (runs as root): seeds the baked config into the `~/.claude` volume **on first run (clean install, NO copy-migration)**, seeds the token + `access.json` (`allowlist`, `allowFrom=[OWNER_ID]`), `unset ANTHROPIC_API_KEY`, then `exec gosu botuser python3 tg-worker.py`.
+- **State on a single `~/.claude` volume**: `settings.json`/`CLAUDE.md`/`plugins/`/creds; `telegram/` (token, `access.json`, `sessions/`, `worker.log`); `workspace/` (cwd, `reminders/`, `.workspace/`).
 - **Admin via `docker exec tg-access …`** (the host is the authenticated channel). Never change access from a Telegram message.
 
 ## Environment variables
@@ -89,21 +93,54 @@ docker exec claude-tg-bot claude auth status   # loggedIn:true
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | ✅ | from @BotFather |
 | `OWNER_ID` | ✅ | your Telegram user_id (single owner) |
-| `CLAUDE_CODE_OAUTH_TOKEN` | recommended | headless auth — generate once with `claude setup-token`, paste here. Survives volume wipes. |
-| `PERMISSION_MODE` | optional | `auto`/`default`/`acceptEdits`/`bypassPermissions`/`manual`/`plan`. **Unset = `auto`** — classifier-gated Auto Mode: auto-approves safe actions, blocks risky/production ones → runs unattended without hanging, still safe. Override when needed, e.g. `acceptEdits` (which still prompts on every Bash command). |
-| `BOT_ROLE` | optional | Specialized role: `ba`/`planner`/`dev-fe`/`dev-be`/`tester`/`infra`. Seeds the role's CLAUDE.md + settings + rules (layered on the base) on first run. **Unset / `default` = unchanged default behavior.** See [Role profiles](#role-profiles) + `roles/README.md`. |
-| `WORK_DIR` | optional | dir the bot's claude runs in (file ops land here, pre-trusted). Default `/working-directory/claude-telegram-bot`; persisted on the `botwork` volume. |
-| `ANTHROPIC_API_KEY` | fallback | pay-per-token instead of your subscription |
-| `MODEL` / `TZ` | optional | |
+| `CLAUDE_CODE_OAUTH_TOKEN` | recommended | headless auth (subscription) — generate with `claude setup-token`. Survives volume wipes. |
+| `TG_WORKER_ALLOWED_TOOLS` | optional | comma-list for `--allowedTools`. Default `mcp__mempalace,Read,Grep,Glob,WebFetch,WebSearch` (NO Bash). Widen for trusted personal bots. |
+| `TG_WORKER_PERMISSION_MODE` | optional | the worker's `--permission-mode` (`default`/`acceptEdits`/`bypassPermissions`/`plan`). Unset → falls back to `PERMISSION_MODE`. |
+| `PERMISSION_MODE` | optional | Alias: `auto`→`acceptEdits`, `manual`→`default`, empty→`acceptEdits`. |
+| `MODEL` | optional | e.g. `sonnet` |
+| `TZ` | optional | default `Asia/Ho_Chi_Minh` — the reminder scheduler fires in this timezone |
+| `BOT_ROLE` | optional | `ba`/`planner`/`dev-fe`/`dev-be`/`tester`/`infra`; unset = default |
+| `WORK_DIR` / `CLAUDE_CONFIG_DIR` / `TELEGRAM_STATE_DIR` | optional | default to the `~/.claude` layout |
+
+## Reminders
+
+The owner says "remind me at 8am tomorrow about the meeting" / "every Monday at 9am remind me to report" → Claude uses `tg-reminder` to create a reminder; the worker's scheduler fires it when due (container time).
+
+```bash
+tg-reminder add --chat <chat_id> --text "Drink water" --daily 15:00
+tg-reminder add --chat <chat_id> --prompt "Summarize today's AI news" --weekly mon 09:00
+tg-reminder add --chat <chat_id> --text "Team meeting" --at 2026-07-20T08:00
+tg-reminder list
+tg-reminder remove <id>
+```
+`--text` = send the literal string; `--prompt` = run one `claude -p` turn and send its output (dynamic content). Exactly one of `--text`/`--prompt`, exactly one schedule (`--at`/`--daily`/`--weekly`).
+
+## Migration from v1.x to v2.2 (clean install)
+
+v2.2 does NOT migrate the old `/data` volume (a copy would break the plugin paths). Rebuild each bot fresh:
+
+```bash
+# 1) create a new ~/.claude volume, run the container on :v2.2.0 (keep token + owner)
+docker run -d --name <bot> --restart unless-stopped \
+  -e TELEGRAM_BOT_TOKEN=<token> -e OWNER_ID=<id> \
+  -e CLAUDE_CODE_OAUTH_TOKEN=<oauth> -e MODEL=sonnet \
+  -v <bot>-claude:/home/botuser/.claude \
+  ghcr.io/trongnguyenbinh/claude-telegram-docker:v2.2.0
+# 2) re-add the mempalace MCP (per-bot token)
+docker exec -u botuser <bot> claude mcp add --scope user --transport http mempalace \
+  https://<domain>/mcp --header "Authorization: Bearer <token>"
+docker restart <bot>
+# 3) enable groups (the owner runs this in the terminal)
+docker exec -u botuser <bot> tg-access group add <groupId>
+```
+Rollback = keep the old v1.x container/volume as-is (don't delete it until v2.2 runs cleanly).
 
 ## Gotchas
 
-- `claude --channels` is an interactive TUI → the container needs a PTY (`tty: true` + `stdin_open: true`, already set in compose; use `-it` with `docker run`).
-- **One token = one container.** Telegram allows a single `getUpdates` poller per token; two containers on the same token → 409 conflict.
-- Changing the token requires a container restart (read once at boot).
-- **Poller stall after a recreate:** verify `pending_update_count` drains to 0 (use `bot-doctor`); if the poller stalls (a msg stuck in the input box) → `docker restart <bot>` clears it.
-- **The baked `permissions` block only seeds FRESH volumes** — existing bots need a manual merge into `/data/.claude/settings.json`, then restart.
-- **An extra docker network (e.g. `db-shared`) is NOT preserved by a plain recreate** → add `--network <net>` on the `docker run`.
+- **One token = one container.** Telegram allows a single `getUpdates` poller per token → two containers on the same token = 409 conflict.
+- Changing the token requires a container restart (the worker reads the token once at boot).
+- **Only mount `~/.claude`**, don't mount all of `/home/botuser` (it would shadow the `claude`/`bun` binaries in the image layer).
+- **Group-exposed bots**: keep `TG_WORKER_ALLOWED_TOOLS` at the default (no Bash) for injection safety.
 - Details + playbook: [`OPERATIONS.md`](./OPERATIONS.md).
 
 ## tg-access
@@ -119,45 +156,29 @@ tg-access pair <code>
 
 ## Role profiles
 
-A bot can boot into a **role** in the AI delivery workflow (Define/BA → Planning → Build → Tester/QA) via `BOT_ROLE`. Each role seeds a role-specific "how I work" CLAUDE.md + `settings-fragment` + rules that **layer on top of** the base CLAUDE.md (security, info-isolation, `.workspace`, reply tone stay the shared base). The role rules are generic English craft standards — layer any project-specific glue (your issue tracker, channels, conventions) in a per-bot overlay.
+Unset = default. Details: [`roles/README.md`](./roles/README.md).
 
 | `BOT_ROLE` | Stage | What the bot does |
 |---|---|---|
-| `ba` | Define | Elicit + clarify requirements, write user stories + acceptance criteria + a lightweight spec, build a UI prototype → preview deploy; on sign-off → create a tracked work item + sync the shared knowledge base + publish the handoff. |
-| `planner` | Planning | Break a parent item into area sub-tasks (`area:frontend/backend/db/infra/qa`) + estimate + link to parent → the board → publish + @mention. |
-| `dev-fe` | Build (FE) | Pick an `area:frontend` sub-task → branch → code UI → PR `Closes #issue`; gate-aware (quality + security); frontend-design + preview deploy + Playwright. |
-| `dev-be` | Build (BE) | Pick an `area:backend` sub-task → branch → code API/DB + migration → PR `Closes #issue`; migration/db + gate awareness. |
-| `tester` | Tester/QA | From the release notes write test guidance + test cases; receive a bug report from the test site → cross-check the spec → if it looks like a real bug, publish to the channel + tag the lead. |
-| `infra` | Ops (cross-cutting) | Generic DevOps/infra-ops agent for the bot fleet + shared services: deploy/recreate/update bots (env-preserving), health/logs triage, service config, inventory → shared memory. Owner-only; mandatory typed confirmation before any destructive op; never prints secrets; audits every action. |
+| `ba` | Define | Clarify requirements, user stories + acceptance criteria + a lightweight spec, UI prototype → preview; on sign-off → create a work item + sync KB + handoff. |
+| `planner` | Planning | Break a parent item into area sub-tasks + estimate + link → the board → publish. |
+| `dev-fe` | Build (FE) | Pick `area:frontend` → branch → code UI → PR `Closes #issue`. |
+| `dev-be` | Build (BE) | Pick `area:backend` → branch → code API/DB + migration → PR. |
+| `tester` | Tester/QA | From the release notes write test cases; receive a bug → cross-check the spec → publish + tag the lead. |
+| `infra` | Ops | DevOps agent for the fleet: deploy/recreate/update bots, health/logs triage. Owner-only; confirm before destructive ops; never prints secrets. |
 
-**Unset / empty / `default` = unchanged default behavior** (existing bots are unaffected). An unknown role → the entrypoint logs a note and runs as default.
+## `:v2.2.0-playwright` variant (render UI + screenshot)
 
-```bash
-# example: launch a BA bot
-docker run -d --name mybot-ba \
-  -e TELEGRAM_BOT_TOKEN=<token> -e OWNER_ID=<id> -e BOT_ROLE=ba \
-  -v mybot-ba-data:/data --restart unless-stopped \
-  ghcr.io/trongnguyenbinh/claude-telegram-docker:latest
-```
-
-> The role CLAUDE.md is seeded only when the work-dir has no CLAUDE.md yet (never clobbers a per-bot file). The `settings-fragment` merge is a union (safe to re-run). To add a new role, see [`roles/README.md`](./roles/README.md).
-
-## `:playwright` variant (render UI + screenshot)
-
-For bots that need a browser (build UI, take screenshots). This variant = base image + real Node 20 + Chromium + Playwright (heavier by ~1GB, **amd64 only**). Built from `Dockerfile.playwright`, published as the `:playwright` tag.
-
-Give a bot Playwright:
+Base v2.2.0 + real Node 20 + Chromium + Playwright (heavier by ~1GB, **amd64 only**). Give a bot Playwright:
 
 ```bash
-# 1) Run / recreate the bot on the :playwright image (same volumes + env as usual)
-ghcr.io/trongnguyenbinh/claude-telegram-docker:playwright
-
-# 2) Wire the Playwright MCP using the BAKED binary (NOT npx — npx re-downloads the package on every start → connection failure)
+# run/recreate the bot on the :v2.2.0-playwright image (same volume + env)
 docker exec -u botuser <bot> claude mcp add --scope user playwright -- playwright-mcp --headless
 docker restart <bot>
+# widen allowedTools so the bot can use the browser:
+#   -e TG_WORKER_ALLOWED_TOOLS="mcp__mempalace,mcp__playwright,Read,Grep,Glob,WebFetch,WebSearch"
 ```
-
-> ⚠️ Use `playwright-mcp --headless` (the baked global binary), NOT `npx @playwright/mcp@latest` (re-downloads on every boot → MCP "Failed to connect" + can stall the poller).
+> ⚠️ Use `playwright-mcp --headless` (the baked binary), NOT `npx @playwright/mcp@latest`.
 
 ## License
 

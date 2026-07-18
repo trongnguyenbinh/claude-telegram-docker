@@ -1,7 +1,53 @@
 # SPEC — Claude Telegram Bot, đóng gói Docker ("bot-in-a-box")
 
 > Trạng thái: **bản spec để review** (chưa code). Mục tiêu: gói toàn bộ một con Claude-Telegram bot thành 1 Docker image chạy được bằng `docker run` / `docker compose up`, truyền token qua biến môi trường, quản trị qua `docker exec`.
-> Cập nhật: 2026-06-26.
+> Cập nhật: 2026-06-26. **Bổ sung §v2.2 (2026-07-19).**
+
+---
+
+## §v2.2 — Worker transport (thay thế `--channels`)
+
+> Từ v2.2, phần transport bên dưới (§2/§6/§7 nói về `claude --channels` + plugin telegram)
+> **bị thay thế** bởi mô hình worker. Các phần access/security/state vẫn đúng về ý niệm nhưng
+> đổi đường dẫn. Thiết kế đầy đủ + quyết định đã chốt: `docs/superpowers/specs/2026-07-19-v2.2-worker-image-design.md`.
+
+**Vì sao đổi:** poller của `claude --channels` (Claude Code 2.1.214 + plugin telegram) không
+ổn định — hay không start được lúc container start/restart (không có `bot.pid`,
+`pending_update_count` kẹt) dù `mcp list` báo "Connected". Đã xác minh lỗi nằm ở CLI channel
+host của Claude Code, không phải image. Watchdog/retry không trị dứt.
+
+**Kiến trúc v2.2:**
+- Tiến trình chính = **worker Python** (`scripts/tg-worker.py`, stdlib thuần): long-poll
+  `getUpdates` (timeout 50) → cổng `access.json` (DM `allowFrom`; nhóm `requireMention`/
+  `allowFrom`) → react 👀 → gọi headless `claude -p` (`--output-format json`, `--model`,
+  `--permission-mode` đã map, `--allowedTools`, `--append-system-prompt` react-hint,
+  `--resume` theo `chat_id`) → parse `[[react:X]]` → `sendMessage` (chunk ≤3800, quote-reply
+  trong nhóm). Không tmux, không plugin telegram, không cron.
+- **Auth subscription**: worker `env.pop(ANTHROPIC_API_KEY)` → luôn dùng
+  `CLAUDE_CODE_OAUTH_TOKEN`/creds trên volume, không tính tiền theo token.
+- **Layout một volume `~/.claude`** (`/home/botuser/.claude`): config + `plugins/` + creds;
+  `telegram/` (`.env`, `access.json`, `sessions/`, `offset`, `worker.log`, `worker.heartbeat`);
+  `workspace/` (cwd, `reminders/`, `.workspace/`). CHỈ mount `~/.claude` (mount cả
+  `/home/botuser` sẽ che binary claude/bun trong layer image).
+- **Quyền**: `--allowedTools` mặc định = `mcp__mempalace,Read,Grep,Glob,WebFetch,WebSearch`
+  (KHÔNG Bash tự do — an toàn injection cho bot trong nhóm); nới qua `TG_WORKER_ALLOWED_TOOLS`.
+  `PERMISSION_MODE`/`TG_WORKER_PERMISSION_MODE` map sang giá trị `--permission-mode` hợp lệ
+  (`default|acceptEdits|bypassPermissions|plan`; `auto`→`acceptEdits`, `manual`→`default`).
+- **Nhắc lịch (reminders)**: một luồng scheduler trong worker quét
+  `~/.claude/workspace/reminders/*.json` mỗi ~45s; `mode:text` → `sendMessage`, `mode:claude`
+  → chạy một lượt `claude -p` rồi gửi output; one-off (`when` ISO) hoặc lặp `daily`/`weekly`
+  (theo TZ container). CLI `tg-reminder add|list|remove` + rule trong CLAUDE.md.
+- **Hỏi-lại qua Telegram (behavioral)**: cần input của owner → gửi câu hỏi như reply rồi kết
+  thúc lượt; tin kế của owner là câu trả lời, phiên tiếp tục nhờ `--resume`. Không
+  AskUserQuestion, không chờ terminal. Ép bằng rule CLAUDE.md.
+- **Entrypoint (root → botuser)**: seed `~/.claude` từ staged defaults lần đầu (cài mới sạch,
+  KHÔNG copy-migrate volume v1), `unset ANTHROPIC_API_KEY`, `exec gosu botuser python3 tg-worker.py`.
+- **Healthcheck**: worker sống (pgrep) + heartbeat tươi. Bỏ check tmux; bỏ `tg-watchdog`.
+- **Bỏ `/etc/claude-code/managed-settings.json`** (chỉ gate `--channels`, nay không dùng).
+- **Image/CI**: ship tag riêng `:v2.2.0` (breaking) + `:v2.2.0-playwright` build FROM base đã
+  tag; **KHÔNG đụng `:latest`** (để recreate bot v1 trên `:latest` không nhảy nhầm sang v2.2).
+- **Di trú**: cài mới sạch từng bot (volume `~/.claude` mới + token + access + mempalace).
+  Rollback = image v1.x cũ.
 
 ---
 
