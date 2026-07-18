@@ -9,7 +9,7 @@
 set -u
 [ -f /etc/default/tg-watchdog ] && . /etc/default/tg-watchdog
 BOT_USER="${BOT_USER:-botuser}"
-STATE_DIR="${TELEGRAM_STATE_DIR:-/data/telegram}"
+STATE_DIR="${TELEGRAM_STATE_DIR:-/home/botuser/.claude/channels/telegram}"
 FLAG=/tmp/tg-watchdog.count
 LOG=/tmp/tg-watchdog.log
 
@@ -17,6 +17,20 @@ g() { if [ "$(id -u)" = "0" ] && command -v gosu >/dev/null 2>&1; then gosu "$BO
 
 TOK=$(sed -n 's/^TELEGRAM_BOT_TOKEN=//p' "$STATE_DIR/.env" 2>/dev/null | head -1 | tr -d '"'"'"'"'"'"' ')
 [ -z "$TOK" ] && exit 0
+
+# v2: a DEAD poller (bun channels server never started / crashed) shows no live
+# bot.pid. Sending Enter can't help — the poller isn't running. Restart the session:
+# killing it makes the entrypoint's `tmux attach` exit → PID 1 exits → restart policy
+# respawns the container → the startup self-check brings the poller back up.
+PID="$(cat "$STATE_DIR/bot.pid" 2>/dev/null || true)"
+if [ -z "$PID" ] || [ ! -d "/proc/$PID" ]; then
+  if g tmux has-session -t claude 2>/dev/null; then
+    echo "$(date -u +%FT%TZ) tg-watchdog: poller DEAD (bot.pid='$PID') -> restarting claude session" >> "$LOG"
+    g tmux kill-session -t claude 2>/dev/null || true
+  fi
+  rm -f "$FLAG"
+  exit 0
+fi
 
 P=$(curl -fsS --max-time 15 "https://api.telegram.org/bot$TOK/getWebhookInfo" 2>/dev/null | sed -n 's/.*"pending_update_count":\([0-9]*\).*/\1/p')
 [ -z "$P" ] && exit 0
