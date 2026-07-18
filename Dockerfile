@@ -63,8 +63,8 @@ RUN mkdir -p "$CLAUDE_STAGE" \
  && test -d "$CLAUDE_STAGE/plugins" && test -f "$CLAUDE_STAGE/settings.json"
 
 # --- Default reasoning effort: high — bots think deeper by default. Only seeds
-# FRESH volumes (existing bots keep whatever effortLevel their /data settings has;
-# change a running bot via its /data/.claude/settings.json + restart).
+# FRESH volumes (existing bots keep whatever effortLevel their ~/.claude settings has;
+# change a running bot via its ~/.claude/settings.json + restart).
 RUN cfg="$CLAUDE_STAGE/settings.json"; tmp="$(mktemp)"; \
     jq '.effortLevel = "high"' "$cfg" > "$tmp" && mv "$tmp" "$cfg" \
  && jq -e '.effortLevel == "high"' "$cfg" >/dev/null
@@ -91,7 +91,7 @@ RUN cfg="$CLAUDE_STAGE/settings.json"; tmp="$(mktemp)"; \
 
 # --- Bake default security permissions into the staged settings.json ---
 # deny reading secrets in the work dir / cloned repos (cwd-anchored, so the bot's
-# own /data/telegram/.env token is NOT blocked) + a few destructive circuit-breakers.
+# own ~/.claude/channels/telegram/.env token is NOT blocked) + a few destructive circuit-breakers.
 # allow routine read-only git + gh so bots don't prompt on them.
 RUN cfg="$CLAUDE_STAGE/settings.json"; tmp="$(mktemp)"; \
     jq '.permissions.deny = ((.permissions.deny // []) + ["Read(.env)","Read(.env.*)","Read(**/.env)","Read(**/.env.*)","Read(**/secrets/**)","Read(**/id_rsa)","Read(**/id_ed25519)","Read(**/*.pem)","Bash(rm -rf /)","Bash(rm -rf /*)","Bash(rm -rf ~)","Bash(mkfs *)","Bash(dd if=* of=/dev/*)"]) | .permissions.allow = ((.permissions.allow // []) + ["Bash(git status)","Bash(git diff *)","Bash(git log *)","Bash(git branch *)","Bash(gh *)"])' "$cfg" > "$tmp" && mv "$tmp" "$cfg" \
@@ -148,10 +148,10 @@ RUN chmod +x /usr/local/bin/tg-access /usr/local/bin/entrypoint.sh /usr/local/bi
 HEALTHCHECK --interval=60s --timeout=10s --start-period=90s --retries=3 \
   CMD /usr/local/bin/tg-healthcheck
 
-# --- runtime config: config + state live on the volume so login + access persist ---
-ENV CLAUDE_CONFIG_DIR=/data/.claude \
-    TELEGRAM_STATE_DIR=/data/telegram
-VOLUME /data
+# --- runtime config: everything durable lives under the default ~/.claude (one volume).
+# No CLAUDE_CONFIG_DIR / TELEGRAM_STATE_DIR overrides — Claude Code + the telegram
+# plugin use their defaults, which resolve under /home/botuser/.claude (v2). ---
+VOLUME /home/botuser/.claude
 
 # claude --channels is an interactive TUI → run with -it / tty:true.
 # ENTRYPOINT runs as root; entrypoint.sh chowns the volumes then `exec gosu botuser`.
