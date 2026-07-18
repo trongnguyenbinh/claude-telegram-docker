@@ -9,16 +9,22 @@ set -euo pipefail
 : "${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN required (docker run -e ...)}"
 : "${OWNER_ID:?OWNER_ID required (docker run -e ...)}"
 
-BOT_USER="${BOT_USER:-botuser}"
-BOT_HOME="${BOT_HOME:-/home/botuser}"
-CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-/data/.claude}"
-TELEGRAM_STATE_DIR="${TELEGRAM_STATE_DIR:-/data/telegram}"
+# v2: single-volume default layout. Everything durable lives under ~/.claude.
+BOT_USER="botuser"                 # non-root only (auto/bypass requires it); root option dropped
+BOT_HOME="/home/botuser"
+CLAUDE_CONFIG_DIR="$BOT_HOME/.claude"
+TELEGRAM_STATE_DIR="$CLAUDE_CONFIG_DIR/channels/telegram"   # == telegram plugin default
+WORK_DIR="$CLAUDE_CONFIG_DIR/workspace"                     # session CWD; .workspace + repo clones
 CLAUDE_STAGE="${CLAUDE_STAGE:-$BOT_HOME/claude-stage}"
-# Working directory the bot's claude session runs in (file ops land here).
-WORK_DIR="${WORK_DIR:-/working-directory/claude-telegram-bot}"
 export CLAUDE_CONFIG_DIR TELEGRAM_STATE_DIR WORK_DIR
 
 mkdir -p "$CLAUDE_CONFIG_DIR" "$TELEGRAM_STATE_DIR" "$TELEGRAM_STATE_DIR/approved" "$WORK_DIR"
+
+# v2: env token is the single source of auth. A leftover .credentials.json (from a
+# past interactive login) OVERRIDES the env token and silently 401s when it expires.
+if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+  rm -f "$CLAUDE_CONFIG_DIR/.credentials.json"
+fi
 
 # 1) Seed baked Claude config (settings.json + plugins/ tree) from image staging
 #    -> volume config, first run only. cp -a preserves botuser ownership.
@@ -149,9 +155,7 @@ mark_onboarded "$BOT_HOME/.claude.json"
 
 # 4) Hand ownership of the volumes + config to botuser so the non-root claude
 #    session can read/write them (needed for both fresh and pre-existing volumes).
-chown -R "$BOT_USER":"$BOT_USER" /data 2>/dev/null || true
-chown "$BOT_USER":"$BOT_USER" /working-directory 2>/dev/null || true
-chown -R "$BOT_USER":"$BOT_USER" "$WORK_DIR" 2>/dev/null || true
+chown -R "$BOT_USER":"$BOT_USER" "$CLAUDE_CONFIG_DIR" 2>/dev/null || true
 chown "$BOT_USER":"$BOT_USER" "$BOT_HOME/.claude.json" 2>/dev/null || true
 
 # 5) Auth: log in once with the NORMAL interactive login — creds persist on the
@@ -173,6 +177,9 @@ fi
 #    everything with no checks.) Override with e.g. PERMISSION_MODE=acceptEdits.
 #    Works because claude runs NON-ROOT (below) + the accept flag is baked (3b).
 PERMISSION_MODE="${PERMISSION_MODE:-auto}"
+# auto only for channel bots — acceptEdits hangs the reply tool (not an "edit") and
+# stalls the poller (the 2026-07-18 "no bot responds" root cause). Force it.
+case "$PERMISSION_MODE" in acceptEdits) echo "[entrypoint] WARN PERMISSION_MODE=acceptEdits stalls channel bots -> forcing auto"; PERMISSION_MODE=auto;; esac
 
 # 6b) Start the cron daemon (as root, before the privilege drop). It runs both
 #     bot-scheduled reminders AND the tg-watchdog poller self-heal. Write the
