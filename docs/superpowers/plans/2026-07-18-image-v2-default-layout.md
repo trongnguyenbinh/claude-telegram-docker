@@ -284,7 +284,9 @@ git commit -m "feat(tg-healthcheck): mark unhealthy when poller down (v2)"
 
 ---
 
-### Task 6: Build v2 + PILOT on bot-haeco (manual migration + end-to-end verify)
+### Task 6: Build v2 + PILOT on bot-haeco (CLEAN INSTALL + end-to-end verify)
+
+> **REVISED 2026-07-18 after piloting.** The copy-migration originally in this task is SUPERSEDED — it carries stale `/data/.claude` plugin cache paths → the poller dies mute (spec §5). **Use CLEAN INSTALL**: preserve memory to mempalace, capture the old `.mcpServers.mempalace` entry, start v2 on a BRAND-NEW empty `bot-<name>-claude` volume + the env token (no re-login), re-add mempalace, verify inbound→reply. Also: the poller is flaky on start → self-heal was hardened (entrypoint loops the poller check 6×, `tg-startup.lock` fences the watchdog, watchdog needs 2 dead-strikes), shipping as **v2.0.1** — kill-test that until the poller reliably comes up before rolling the fleet.
 
 **Files:** none (ops task on VPS 122). SSH: `~/.ssh/id_ed25519_cocandy_root` → `root@116.118.47.122`.
 

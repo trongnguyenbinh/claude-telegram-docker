@@ -43,26 +43,18 @@ Simplify the bot image to use Claude Code's **default profile layout** — every
 - No more `CLAUDE_CONFIG_DIR` / `TELEGRAM_STATE_DIR` / `WORK_DIR` env overrides — Claude Code and the telegram plugin use their defaults, which now all resolve under `~/.claude`.
 - Heavy/ephemeral scratch that shouldn't persist can still go to `/tmp`. A dev bot that wants an extra dedicated repo volume can add one — optional, not default.
 
-## 5. Migration — MANUAL ops procedure (NOT in the image)
+## 5. Migration — CLEAN REBUILD + mempalace (NOT copy-volume)
 
-The image knows nothing about the old layout. For each existing bot, the assistant runs a one-time copy into a fresh `~/.claude` volume before starting v2. Sketch (run in a throwaway helper container so no binaries are shadowed):
+> **Revised 2026-07-18 after the haeco pilot.** The first approach (copy the old `/data` volume into a fresh `~/.claude`) FAILED: the copied `plugins/installed_plugins.json` + `known_marketplaces.json` carry absolute cache paths to the old runtime `/data/.claude/plugins/...`, which don't exist in v2 (`~/.claude/plugins/...`), so the telegram plugin hits `cache-miss`, its channel poller never starts, and the bot is silently mute. The entrypoint's existing `sed` only rewrites `/opt/claude-stage`/`$CLAUDE_STAGE`, not `/data/.claude`. **Proven fix: don't migrate baked artifacts at all — do a CLEAN INSTALL** (Edward's call). A clean-install v2 bot has a correct plugin cache and a working poller (validated on haeco: `bot.pid` present, `getUpdates`→409 = actively long-polling, replied to a real DM).
 
-```
-docker create --name mig-<name> \
-  -v bot-<name>-data:/legacy/data:ro \      # old /data: .claude/ + telegram/
-  -v bot-<name>-work:/legacy/work:ro \      # old /working-directory: .workspace + CLAUDE.md
-  -v bot-<name>-claude:/newclaude \         # new empty volume
-  alpine sh -c '
-    mkdir -p /newclaude/channels /newclaude/workspace
-    cp -a /legacy/data/.claude/.       /newclaude/                       # settings, plugins, .credentials.json, .claude.json
-    cp -a /legacy/data/telegram        /newclaude/channels/telegram
-    cp -a /legacy/work/.workspace      /newclaude/workspace/.workspace   2>/dev/null || true
-    [ -f /legacy/work/CLAUDE.md ] && cp -a /legacy/work/CLAUDE.md /newclaude/workspace/CLAUDE.md
-    chown -R 1000:1000 /newclaude
-  '
-```
+Per bot, in order:
+1. **Preserve memory to mempalace.** The bot's durable brain is the shared mempalace, not the local volume. Before deleting anything, make sure the bot has synced its `.workspace` memory up (bot does this itself; for a bot with no `.workspace` — e.g. haeco — there's nothing to sync).
+2. **Capture the mempalace MCP config** from the old config so the clean bot reconnects to the shared brain: `docker inspect`/read `~/.claude/.claude.json` `.mcpServers.mempalace` (type `http`, `url` e.g. `https://mempalace.veasy.vn/mcp`, `headers.Authorization: Bearer <token>`) from the old volume — keep the token, never print it.
+3. **Start v2 CLEAN:** stop+rename the old container to `-v1bak`, create a BRAND-NEW empty `bot-<name>-claude` volume, `docker run` v2 with only `-v bot-<name>-claude:/home/botuser/.claude` and the run-time env (`CLAUDE_CODE_OAUTH_TOKEN` — no re-login needed if still valid, `TELEGRAM_BOT_TOKEN`, `OWNER_ID`, `MODEL`, `PERMISSION_MODE=auto`). The entrypoint seeds fresh baked v2 plugins (correct paths) + seeds `access.json` (owner-only) + the token file.
+4. **Re-add the mempalace MCP** into the new `~/.claude/.claude.json` `.mcpServers.mempalace` (jq-merge the captured entry), restart, confirm `claude mcp list` shows mempalace + telegram Connected.
+5. **Verify healthy end-to-end** (§6 checklist incl. a real inbound→reply) before deleting `-v1bak` and the old volumes (keep them as cold backup for a while).
 
-Then start the v2 container with ONLY `-v bot-<name>-claude:/home/botuser/.claude`. Entrypoint sees a populated `~/.claude` → skips fresh-seed, normalizes plugin cache paths (existing `sed` self-heal, retargeted to `~/.claude`), starts. Verify healthy (§6 checklist) before deleting the old volumes; keep them as cold backup.
+Fresh bots (brand new, no prior bot): identical to step 3 without the mempalace steps unless the bot should share the brain.
 
 **Fresh bots (no migration):** start v2 with an empty `bot-<name>-claude` volume + `CLAUDE_CODE_OAUTH_TOKEN` env → entrypoint seeds baked defaults into `~/.claude`, then `docker exec claude setup-token` / access config as normal.
 
