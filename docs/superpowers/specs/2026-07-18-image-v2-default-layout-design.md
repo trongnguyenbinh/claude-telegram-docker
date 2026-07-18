@@ -16,7 +16,7 @@ Simplify the bot image to use Claude Code's **default profile layout** — every
 
 | # | Decision | Choice |
 |---|----------|--------|
-| 1 | Migrate existing bots' data | **Auto-migrate** — v2 entrypoint detects the legacy `/data` layout on first boot and copies it into `~/.claude`. No re-login, no re-authorize. |
+| 1 | Migrate existing bots' data | **NOT baked into the image.** The image is a **clean install only** — the entrypoint just seeds fresh defaults into an empty `~/.claude`, no legacy-layout detection. Migrating each existing bot's data from the old `/data` volumes into the new `~/.claude` layout is done **manually by the assistant during cutover** (documented ops procedure, §5). Keeps the image simple; migration complexity lives in an ops runbook run once per bot, not in every build. |
 | 2 | What to mount | **One volume: `~/.claude`.** Everything durable lives inside it. Cannot mount the whole home (`/home/botuser`) — the `claude`/`bun` binaries live there in the image layer and a volume would shadow them. |
 | 3 | Run user | **All `botuser` (non-root).** Drop the `BOT_USER=root` option entirely (root breaks `bypassPermissions`/auto mode; `bot-edward-tds` gets normalized to botuser). |
 | 4 | Poller reliability | **Self-heal, internal, no external component:** startup self-check + improved `tg-watchdog` that also detects a **dead poller** and restarts the session. |
@@ -43,28 +43,30 @@ Simplify the bot image to use Claude Code's **default profile layout** — every
 - No more `CLAUDE_CONFIG_DIR` / `TELEGRAM_STATE_DIR` / `WORK_DIR` env overrides — Claude Code and the telegram plugin use their defaults, which now all resolve under `~/.claude`.
 - Heavy/ephemeral scratch that shouldn't persist can still go to `/tmp`. A dev bot that wants an extra dedicated repo volume can add one — optional, not default.
 
-## 5. Auto-migration (first boot of v2 over a v1 bot)
+## 5. Migration — MANUAL ops procedure (NOT in the image)
 
-Recreate the bot with BOTH the legacy volumes and the new `~/.claude` volume mounted:
+The image knows nothing about the old layout. For each existing bot, the assistant runs a one-time copy into a fresh `~/.claude` volume before starting v2. Sketch (run in a throwaway helper container so no binaries are shadowed):
 
 ```
--v bot-<name>-data:/legacy/data:ro         (old /data: .claude/ + telegram/)
--v bot-<name>-work:/legacy/work:ro         (old /working-directory: .workspace + CLAUDE.md)
--v bot-<name>-claude:/home/botuser/.claude
+docker create --name mig-<name> \
+  -v bot-<name>-data:/legacy/data:ro \      # old /data: .claude/ + telegram/
+  -v bot-<name>-work:/legacy/work:ro \      # old /working-directory: .workspace + CLAUDE.md
+  -v bot-<name>-claude:/newclaude \         # new empty volume
+  alpine sh -c '
+    mkdir -p /newclaude/channels /newclaude/workspace
+    cp -a /legacy/data/.claude/.       /newclaude/                       # settings, plugins, .credentials.json, .claude.json
+    cp -a /legacy/data/telegram        /newclaude/channels/telegram
+    cp -a /legacy/work/.workspace      /newclaude/workspace/.workspace   2>/dev/null || true
+    [ -f /legacy/work/CLAUDE.md ] && cp -a /legacy/work/CLAUDE.md /newclaude/workspace/CLAUDE.md
+    chown -R 1000:1000 /newclaude
+  '
 ```
 
-Entrypoint, first boot only (guarded by a `~/.claude/.migrated-v2` marker):
+Then start the v2 container with ONLY `-v bot-<name>-claude:/home/botuser/.claude`. Entrypoint sees a populated `~/.claude` → skips fresh-seed, normalizes plugin cache paths (existing `sed` self-heal, retargeted to `~/.claude`), starts. Verify healthy (§6 checklist) before deleting the old volumes; keep them as cold backup.
 
-1. If `~/.claude` has no `plugins/` **and** `/legacy/data/.claude` exists → this is a migration.
-2. Copy `/legacy/data/.claude/*` → `~/.claude/` (settings, plugins, .credentials.json, .claude.json).
-3. Copy `/legacy/data/telegram/*` → `~/.claude/channels/telegram/` (token, access.json, approved/).
-4. Copy `/legacy/work/.workspace` → `~/.claude/workspace/.workspace`; copy `/legacy/work/CLAUDE.md` → `~/.claude/workspace/CLAUDE.md` if present.
-5. `chown -R botuser` the volume, normalize plugin cache paths (existing `sed` self-heal, retargeted to `~/.claude`).
-6. `touch ~/.claude/.migrated-v2`.
+**Fresh bots (no migration):** start v2 with an empty `bot-<name>-claude` volume + `CLAUDE_CODE_OAUTH_TOKEN` env → entrypoint seeds baked defaults into `~/.claude`, then `docker exec claude setup-token` / access config as normal.
 
-Subsequent boots: marker present → skip migration, use `~/.claude` only. Once a bot is confirmed healthy on v2, recreate it **without** the two `/legacy/*` mounts (they remain as untouched backups until Edward decides to delete them).
-
-Fresh (never-migrated) bots: no legacy mounts → entrypoint seeds baked defaults into `~/.claude` as today.
+**Image responsibility = clean install only:** if `~/.claude` is empty → seed baked defaults; if populated → use as-is. No `/legacy/*` awareness, no `.migrated-v2` marker.
 
 ## 6. Poller self-heal (the reliability fix)
 
@@ -89,7 +91,7 @@ Two internal layers, no external orchestrator:
 ## 8. Rollout
 
 1. Build & publish image `v2.0.0` (multi-arch), keep `v1.x`/`:latest` pointing at v1 until v2 is proven.
-2. **Pilot on ONE low-risk bot** (proposed: `bot-haeco`) — recreate with legacy + new volume, verify: auto-migrate ran, `~/.claude` populated, poller `bot.pid` alive, `pending==0`, real inbound→reply works, `.workspace`/access preserved.
+2. **Pilot on ONE low-risk bot** (proposed: `bot-haeco`) — run the manual copy (§5) into a new `bot-haeco-claude` volume, start v2 with only that volume, verify: `~/.claude` populated correctly, poller `bot.pid` alive, `pending==0`, real inbound→reply works, `.workspace`/access preserved.
 3. Kill-test: `docker rm`+`run` the pilot a few times to confirm the poller self-heal reliably brings it up (reproduce the flaky case, watch the watchdog fix it).
 4. Roll the rest of the 122 fleet one by one, then 157 fleet, same recipe.
 5. After each bot is stable on v2, drop its `/legacy/*` mounts (keep the old volumes as cold backup for a while).
