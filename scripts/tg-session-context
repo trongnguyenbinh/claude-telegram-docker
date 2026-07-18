@@ -4,7 +4,7 @@
 # bot biết ngay ĐANG LÀM GÌ và BÁO CÁO CHO AI, thay vì "ngơ".
 # stdout của hook được thêm thẳng vào context của Claude (SessionStart hook).
 set -u
-WS="${WORK_DIR:-/working-directory/claude-telegram-bot}/.workspace"
+WS="${WORK_DIR:-/home/botuser/.claude/workspace}/.workspace"
 
 echo "=== BỐI CẢNH PHIÊN (nạp tự động lúc khởi động — sau recreate vẫn nhớ) ==="
 

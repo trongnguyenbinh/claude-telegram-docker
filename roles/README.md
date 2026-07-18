@@ -23,9 +23,9 @@ Not setting `BOT_ROLE` (or leaving it empty / `default`) = **the default behavio
 docker run -d --name mybot-ba \
   -e TELEGRAM_BOT_TOKEN=<token> -e OWNER_ID=<id> \
   -e BOT_ROLE=ba \
-  -v mybot-ba-data:/data \
+  -v mybot-ba-claude:/home/botuser/.claude \
   --restart unless-stopped \
-  ghcr.io/trongnguyenbinh/claude-telegram-docker:latest
+  ghcr.io/trongnguyenbinh/claude-telegram-docker:v2.2.0
 ```
 
 Same pattern for the ops role: `-e BOT_ROLE=infra`.

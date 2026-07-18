@@ -49,24 +49,29 @@ never in this repo or in chat.
 
 These are recipes, not scripts to run blindly — read the current state first, then act.
 
-- **deploy-bot**: given an image, a name, and env (token/owner/role/etc.), `docker run -d
-  --name <name> -e ... -v <name>-data:/data --restart unless-stopped -it <image>`. Verify the
-  container is healthy and the `claude` tmux session is up before reporting done.
+- **deploy-bot** (v2.2 worker): given an image, a name, and env (token/owner/role/etc.),
+  `docker run -d --name <name> -e ... -v <name>-claude:/home/botuser/.claude --restart
+  unless-stopped <image>`. The worker is a headless daemon — no `-it`/PTY needed. Verify the
+  container is healthy (worker process + fresh heartbeat) before reporting done. (Legacy v1
+  bots use `-v <name>-data:/data` + `-it`; don't mix the two layouts.)
 - **recreate-bot (env-preserving)**: before removing anything, capture what the running
   container already has — `docker inspect` for its full `-e` env list and its volume
   `Mounts` (source → target), plus any extra `--network` it's attached to. Recreate with the
   **same** env, the **same** volumes (reused, not fresh, unless the owner explicitly confirmed
-  a fresh volume), the same extra networks re-attached, `-it` (or `-d -t`) so the tmux session
-  gets a TTY, and the same restart policy. After recreate: verify the container is running,
-  the `claude --channels` tmux session is polling (no stuck `pending_update_count`), and
-  anything that lived only on a fresh-seeded path (e.g. `access.json`) is still correct —
-  reapply it if a fresh volume was used and it's needed.
+  a fresh volume), the same extra networks re-attached, and the same restart policy. After
+  recreate: verify the container is running, the worker is polling (`bot-doctor` shows worker
+  alive + fresh heartbeat + `pending_update_count` draining), and anything that lived only on
+  a fresh-seeded path (e.g. `access.json`) is still correct — reapply it if a fresh volume was used.
 - **update-bot**: pull the new image tag, then run the recreate-bot runbook against the
-  existing (non-fresh) volumes so state carries over.
+  existing (non-fresh) volume so state carries over.
+- **migrate v1→v2.2 (clean install)**: v2.2 changes the layout to a single `~/.claude` volume
+  and cannot reuse a v1 `/data` volume — recreate the bot on `:v2.2.0` with a FRESH
+  `<name>-claude` volume, re-seed token/owner/OAuth, re-add mempalace + groups. Keep the old v1
+  container until the new one is verified (rollback = the v1 image).
 - **bot-doctor / health / logs**: use the bot's own `bot-doctor` (`docker exec <bot>
-  bot-doctor`) plus `docker logs --tail N <bot>` to triage — tmux session alive, permission
-  mode, poller pending-count, locale, base CLAUDE.md present, `.workspace` present, logged in.
-  Report what's broken and the fix, don't just paste raw logs back to the owner.
+  bot-doctor`) plus `docker logs --tail N <bot>` (and `~/.claude/telegram/worker.log`) to
+  triage — worker process alive, heartbeat fresh, permission/tools, poller pending-count,
+  base CLAUDE.md present, `.workspace` present, logged in. Report what's broken and the fix.
 - **service config** (Postgres / Keycloak / Redis / MinIO / Nginx+Certbot, or similar shared
   services): read the current config before changing it; a config change to a shared service
   needs the same destructive-op confirmation gate as recreating a bot's volume if it can drop

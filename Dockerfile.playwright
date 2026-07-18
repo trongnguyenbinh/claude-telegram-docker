@@ -1,7 +1,10 @@
 # claude-telegram-docker + Playwright — variant for bots that RENDER UI and take
 # SCREENSHOTS (headless Chromium). Heavier (~+1GB) so the base image stays lean;
-# only bots that need a browser use this tag (ghcr.io/<owner>/…:playwright).
-ARG BASE=ghcr.io/trongnguyenbinh/claude-telegram-docker:latest
+# only bots that need a browser use this tag.
+#
+# v2.2: builds FROM the v2.2 WORKER base. CI passes the EXACT tagged base via
+# --build-arg BASE (e.g. :v2.2.0) so a tag build never depends on :latest.
+ARG BASE=ghcr.io/trongnguyenbinh/claude-telegram-docker:v2.2.0
 FROM ${BASE}
 
 USER root
@@ -17,6 +20,10 @@ RUN rm -f /usr/local/bin/node \
  && apt-get update && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/*
 
+# The worker's default allowedTools does NOT include mcp__playwright — a bot that
+# needs the browser must widen it, e.g. -e TG_WORKER_ALLOWED_TOOLS="mcp__mempalace,\
+# mcp__playwright,Read,Grep,Glob,WebFetch,WebSearch".
+#
 # @playwright/mcp (pinned) + the EXACT Chromium build its bundled playwright-core
 # uses, into a world-readable global browser path (the bot runs as non-root botuser,
 # so the browser must be readable by it). IMPORTANT: install Chromium via the MCP's
@@ -28,8 +35,9 @@ RUN npm install -g @playwright/mcp@0.0.77 \
  && chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH"
 
 # caveman hooks (`node <script>`) now run on real node (fine). bun stays at
-# /usr/local/bin/bun for the telegram plugin. ENTRYPOINT inherited from the base.
+# /usr/local/bin/bun. ENTRYPOINT (the worker) is inherited from the base.
 # Add the Playwright MCP to a bot — use the BAKED global bin `playwright-mcp`, NOT
 # `npx @playwright/mcp@latest` (npx re-downloads the package on every start, ignoring
-# the baked install → MCP "Failed to connect" + can stall the poller at boot):
+# the baked install → MCP "Failed to connect"):
 #   docker exec -u botuser <bot> claude mcp add --scope user playwright -- playwright-mcp --headless
+#   docker restart <bot>   # and widen TG_WORKER_ALLOWED_TOOLS to include mcp__playwright

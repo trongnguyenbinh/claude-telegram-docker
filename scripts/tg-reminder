@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""tg-reminder — manage worker reminders for claude-telegram-docker v2.2.
+
+Reminders are small JSON files under $WORK_DIR/reminders/. The tg-worker
+scheduler thread scans them every ~45s and fires the due ones (see tg-worker.py).
+This CLI is how the bot (via a CLAUDE.md rule) or an operator adds/lists/removes
+them. It does NOT compute the fire time — the worker owns that (single source of
+truth); it just writes the schedule fields.
+
+Schedule (exactly one of):
+  --at "YYYY-MM-DDTHH:MM"     one-off at a local wall-clock time (container TZ)
+  --daily HH:MM              every day at HH:MM
+  --weekly <day> HH:MM       every <day> (mon..sun or 0-6, Mon=0) at HH:MM
+
+Payload (exactly one of):
+  --text "..."               mode=text: send this literal text
+  --prompt "..."             mode=claude: run a `claude -p` turn, send its output
+
+Examples:
+  tg-reminder add --chat 123 --text "Đứng dậy uống nước" --daily 15:00
+  tg-reminder add --chat 123 --prompt "Tóm tắt tin AI hôm nay" --weekly mon 09:00
+  tg-reminder add --chat 123 --text "Họp team" --at 2026-07-20T08:00
+  tg-reminder list
+  tg-reminder remove rem-1721400000-ab12
+"""
+import os
+import sys
+import json
+import time
+import random
+import argparse
+
+WORK_DIR = os.environ.get("WORK_DIR", "/home/botuser/.claude/workspace")
+REM_DIR = os.path.join(WORK_DIR, "reminders")
+
+WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+def _parse_weekday(s):
+    s = (s or "").strip().lower()
+    if s in WEEKDAYS:
+        return WEEKDAYS[s]
+    try:
+        n = int(s)
+        if 0 <= n <= 6:
+            return n
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError("weekday must be mon..sun or 0-6, got %r" % s)
+
+
+def _valid_hhmm(s):
+    try:
+        hh, mm = s.split(":")
+        hh, mm = int(hh), int(mm)
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            return "%02d:%02d" % (hh, mm)
+    except (ValueError, AttributeError):
+        pass
+    raise argparse.ArgumentTypeError("time must be HH:MM, got %r" % s)
+
+
+def _new_id():
+    return "rem-%d-%s" % (int(time.time()), "".join(random.choice("0123456789abcdef") for _ in range(4)))
+
+
+def cmd_add(args):
+    os.makedirs(REM_DIR, exist_ok=True)
+    if bool(args.text) == bool(args.prompt):
+        sys.exit("give exactly one of --text or --prompt")
+    schedules = [bool(args.at), bool(args.daily), bool(args.weekly)]
+    if sum(schedules) != 1:
+        sys.exit("give exactly one of --at / --daily / --weekly")
+
+    rem = {
+        "id": _new_id(),
+        "chat_id": args.chat,
+        "enabled": True,
+    }
+    if args.prompt:
+        rem["mode"] = "claude"
+        rem["prompt"] = args.prompt
+    else:
+        rem["mode"] = "text"
+        rem["text"] = args.text
+
+    if args.at:
+        rem["recurrence"] = "once"
+        rem["when"] = args.at
+    elif args.daily:
+        rem["recurrence"] = "daily"
+        rem["time"] = args.daily
+    else:  # weekly: (weekday, time)
+        rem["recurrence"] = "weekly"
+        rem["weekday"] = _parse_weekday(args.weekly[0])
+        rem["time"] = _valid_hhmm(args.weekly[1])
+
+    path = os.path.join(REM_DIR, rem["id"] + ".json")
+    with open(path, "w") as fh:
+        json.dump(rem, fh, indent=2)
+    print("added %s (%s)" % (rem["id"], _describe(rem)))
+
+
+def _describe(rem):
+    rec = rem.get("recurrence", "once")
+    if rec == "once":
+        sched = "at %s" % rem.get("when")
+    elif rec == "daily":
+        sched = "daily %s" % rem.get("time")
+    elif rec == "weekly":
+        name = [k for k, v in WEEKDAYS.items() if v == rem.get("weekday")]
+        sched = "weekly %s %s" % (name[0] if name else rem.get("weekday"), rem.get("time"))
+    else:
+        sched = rec
+    payload = rem.get("text") or rem.get("prompt") or ""
+    nf = rem.get("next_fire")
+    tail = " next=%s" % nf if nf else ""
+    flag = "" if rem.get("enabled", True) else " [disabled]"
+    return "%s | %s: %.50s%s%s" % (sched, rem.get("mode"), payload, tail, flag)
+
+
+def cmd_list(args):
+    if not os.path.isdir(REM_DIR):
+        print("(no reminders)")
+        return
+    rows = []
+    for name in sorted(os.listdir(REM_DIR)):
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(REM_DIR, name)) as fh:
+                rem = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if args.chat is not None and rem.get("chat_id") != args.chat:
+            continue
+        rows.append(rem)
+    if not rows:
+        print("(no reminders)")
+        return
+    for rem in rows:
+        print("%-28s chat=%-14s %s" % (rem.get("id"), rem.get("chat_id"), _describe(rem)))
+
+
+def cmd_remove(args):
+    path = os.path.join(REM_DIR, args.id + ".json")
+    if not os.path.isfile(path):
+        sys.exit("no such reminder: %s" % args.id)
+    os.remove(path)
+    print("removed %s" % args.id)
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="tg-reminder", description="Manage tg-worker reminders")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    a = sub.add_parser("add", help="add a reminder")
+    a.add_argument("--chat", type=int, required=True, help="Telegram chat_id to send to")
+    a.add_argument("--text", help="mode=text: literal message to send")
+    a.add_argument("--prompt", help="mode=claude: prompt for a claude -p turn")
+    a.add_argument("--at", help="one-off ISO time: YYYY-MM-DDTHH:MM (container TZ)")
+    a.add_argument("--daily", type=_valid_hhmm, help="daily at HH:MM")
+    a.add_argument("--weekly", nargs=2, metavar=("DAY", "HH:MM"), help="weekly on DAY (mon..sun/0-6) at HH:MM")
+    a.set_defaults(func=cmd_add)
+
+    l = sub.add_parser("list", help="list reminders")
+    l.add_argument("--chat", type=int, default=None, help="filter by chat_id")
+    l.set_defaults(func=cmd_list)
+
+    r = sub.add_parser("remove", help="remove a reminder by id")
+    r.add_argument("id")
+    r.set_defaults(func=cmd_remove)
+
+    args = p.parse_args(argv)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

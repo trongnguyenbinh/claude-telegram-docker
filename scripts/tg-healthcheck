@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
-# tg-healthcheck — Docker HEALTHCHECK cho bot claude-telegram-docker.
-# Kiểm tra LIVENESS: tmux session 'claude' còn sống không (bắt được crash/exit).
-# exit 0 = healthy, 1 = unhealthy. Cố ý KHÔNG gọi Telegram API mỗi vòng (tránh
-# rate-limit + false-negative do mạng chập chờn) — poller-stall thì dùng `bot-doctor`.
-BOT_USER="${BOT_USER:-botuser}"
-if [ "$(id -u)" = "0" ] && command -v gosu >/dev/null 2>&1; then
-  gosu "$BOT_USER" tmux has-session -t claude 2>/dev/null && exit 0
-else
-  tmux has-session -t claude 2>/dev/null && exit 0
+# tg-healthcheck — Docker HEALTHCHECK for a claude-telegram-docker v2.2 (worker) bot.
+# Healthy = the tg-worker.py process is alive AND recently active (its heartbeat
+# file is fresh). The worker rewrites the heartbeat every getUpdates cycle (<=50s)
+# and every scheduler tick (~45s), so a stale heartbeat means the worker is wedged.
+# exit 0 = healthy, 1 = unhealthy. Deliberately does NOT call the Telegram API each
+# round (avoids rate-limit + network false-negatives).
+set -u
+STATE_DIR="${TELEGRAM_STATE_DIR:-/home/botuser/.claude/telegram}"
+HEARTBEAT="$STATE_DIR/worker.heartbeat"
+MAX_AGE="${TG_HEARTBEAT_MAX_AGE:-180}"   # seconds
+
+# 1) process alive?
+pgrep -f "tg-worker.py" >/dev/null 2>&1 || exit 1
+
+# 2) heartbeat fresh? (skip if it doesn't exist yet during the start-period grace)
+if [ -f "$HEARTBEAT" ]; then
+  now="$(date +%s)"
+  mtime="$(stat -c %Y "$HEARTBEAT" 2>/dev/null || echo 0)"
+  age=$(( now - mtime ))
+  [ "$age" -le "$MAX_AGE" ] || exit 1
 fi
-exit 1
+
+exit 0

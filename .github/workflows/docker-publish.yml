@@ -39,6 +39,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
+            # :latest ONLY on the default branch (main). A `v*` tag push therefore
+            # publishes :vX.Y.Z (+ :sha) but does NOT move :latest — so recreating a
+            # running bot on :latest never silently jumps it onto a breaking release.
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=tag
             type=sha,format=short
@@ -55,8 +58,10 @@ jobs:
           cache-to: type=gha,mode=max
 
   # Playwright variant (real node + Chromium) for bots that render UI + screenshot.
-  # Builds FROM the :latest just pushed above. amd64 only (Chromium arm64 build under
-  # QEMU is slow/flaky); most bot VPS are amd64.
+  # amd64 only (Chromium arm64 build under QEMU is slow/flaky); most bot VPS are amd64.
+  # Branch push  -> builds FROM :latest,  tags :playwright.
+  # Tag push v*  -> builds FROM the TAGGED base (:vX.Y.Z), tags :vX.Y.Z-playwright
+  #                 (never depends on :latest, and does NOT move :playwright).
   build-playwright:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -74,14 +79,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compute base + playwright tag (tag build -> tagged base)
+        id: pw
+        run: |
+          REPO="ghcr.io/${{ github.repository }}"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "base=$REPO:${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "tags=$REPO:${{ github.ref_name }}-playwright" >> "$GITHUB_OUTPUT"
+          else
+            echo "base=$REPO:latest" >> "$GITHUB_OUTPUT"
+            echo "tags=$REPO:playwright" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push playwright variant
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.playwright
-          build-args: BASE=ghcr.io/${{ github.repository }}:latest
+          build-args: BASE=${{ steps.pw.outputs.base }}
           platforms: linux/amd64
           push: true
-          tags: ghcr.io/${{ github.repository }}:playwright
+          tags: ${{ steps.pw.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
