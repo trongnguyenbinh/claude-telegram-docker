@@ -13,7 +13,10 @@ set -euo pipefail
 BOT_USER="botuser"                 # non-root only (auto/bypass requires it); root option dropped
 BOT_HOME="/home/botuser"
 CLAUDE_CONFIG_DIR="$BOT_HOME/.claude"
-TELEGRAM_STATE_DIR="$CLAUDE_CONFIG_DIR/channels/telegram"   # == telegram plugin default
+# NOT under ~/.claude/channels/ — Claude 2.1.214's native --channels machinery owns
+# that namespace, and putting the plugin's state there correlates with the poller
+# failing to start (pilot 2026-07-18). A sibling dir avoids the collision.
+TELEGRAM_STATE_DIR="$CLAUDE_CONFIG_DIR/telegram"
 WORK_DIR="$CLAUDE_CONFIG_DIR/workspace"                     # session CWD; .workspace + repo clones
 CLAUDE_STAGE="${CLAUDE_STAGE:-$BOT_HOME/claude-stage}"
 export CLAUDE_CONFIG_DIR TELEGRAM_STATE_DIR WORK_DIR
@@ -212,24 +215,23 @@ poller_up() {
   local pid; pid="$(cat "$TELEGRAM_STATE_DIR/bot.pid" 2>/dev/null || true)"
   [ -n "$pid" ] && [ -d "/proc/$pid" ]
 }
-# v2 startup self-check (LOOPED): claude 2.1.214's --channels telegram poller is
-# flaky on start — it often fails to begin polling (no bot.pid). Retry the whole
-# session up to 6 times, waiting ~35s each, until bot.pid appears. Empirically one
-# restart isn't enough (the failure is ~50/50), so we loop.
-# Marker: tell tg-watchdog to stand down while we're actively managing the session
-# during startup (else it would kill the session mid-self-check).
+# v2 startup self-check: give the poller a GENEROUS window per attempt (it can take
+# 40-70s to begin polling), and only restart the whole session if bot.pid is still
+# absent after that — up to 3 attempts. (Earlier a 35s/6x loop was too aggressive:
+# it kept killing the session before the poller finished starting.)
+# Marker: tell tg-watchdog to stand down while we're actively managing the session.
 : > /tmp/tg-startup.lock
 POLLER_OK=0
-for attempt in $(seq 1 6); do
-  echo "[entrypoint] launching claude --channels session (attempt $attempt/6)"
+for attempt in 1 2 3; do
+  echo "[entrypoint] launching claude --channels session (attempt $attempt/3)"
   gosu "$BOT_USER" env HOME="$BOT_HOME" tmux kill-session -t claude 2>/dev/null || true
   sleep 1
   launch_session
-  for _ in $(seq 1 7); do sleep 5; poller_up && { POLLER_OK=1; break; }; done
+  for _ in $(seq 1 14); do sleep 5; poller_up && { POLLER_OK=1; break; }; done   # ~70s
   [ "$POLLER_OK" = 1 ] && { echo "[entrypoint] poller up on attempt $attempt (bot.pid=$(cat "$TELEGRAM_STATE_DIR/bot.pid" 2>/dev/null))"; break; }
-  echo "[entrypoint] poller not up after attempt $attempt (~35s) -> retrying"
+  echo "[entrypoint] poller not up after attempt $attempt (~70s) -> retrying"
 done
-[ "$POLLER_OK" != 1 ] && echo "[entrypoint] WARN poller still not up after 6 attempts -> attaching anyway; tg-watchdog will keep trying"
+[ "$POLLER_OK" != 1 ] && echo "[entrypoint] WARN poller still not up after 3 attempts -> attaching anyway; tg-watchdog will keep trying"
 rm -f /tmp/tg-startup.lock   # startup done → tg-watchdog may act from here on
 echo "[entrypoint] claude --channels session live; attaching to keep PID 1 alive"
 # Keep PID 1 alive + tie container lifecycle to the tmux session (exit -> container

@@ -9,7 +9,7 @@
 set -u
 [ -f /etc/default/tg-watchdog ] && . /etc/default/tg-watchdog
 BOT_USER="${BOT_USER:-botuser}"
-STATE_DIR="${TELEGRAM_STATE_DIR:-/home/botuser/.claude/channels/telegram}"
+STATE_DIR="${TELEGRAM_STATE_DIR:-/home/botuser/.claude/telegram}"
 FLAG=/tmp/tg-watchdog.count
 DEADFLAG=/tmp/tg-watchdog.dead
 LOG=/tmp/tg-watchdog.log

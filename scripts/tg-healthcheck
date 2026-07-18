@@ -6,7 +6,7 @@
 # dù session trông vẫn ổn (bug bot-toa-an 2026-07-18) → phải báo unhealthy.
 # Cố ý KHÔNG gọi Telegram API mỗi vòng (tránh rate-limit + false-negative do mạng).
 BOT_USER="${BOT_USER:-botuser}"
-STATE_DIR="${TELEGRAM_STATE_DIR:-/home/botuser/.claude/channels/telegram}"
+STATE_DIR="${TELEGRAM_STATE_DIR:-/home/botuser/.claude/telegram}"
 g() { if [ "$(id -u)" = "0" ] && command -v gosu >/dev/null 2>&1; then gosu "$BOT_USER" "$@"; else "$@"; fi; }
 
 # 1) tmux 'claude' session alive?
