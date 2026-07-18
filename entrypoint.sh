@@ -204,5 +204,24 @@ echo "[entrypoint] xem session:  docker exec -it -u $BOT_USER <container> tmux a
 # `tmux attach` (detach safely with Ctrl+B D — never kills the bot). tmux is PID 1's
 # foreground process (needs tty:true / -it). When claude exits the session ends →
 # tmux exits → container exits → restart policy restarts it.
-exec gosu "$BOT_USER" env HOME="$BOT_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" TELEGRAM_STATE_DIR="$TELEGRAM_STATE_DIR" WORK_DIR="$WORK_DIR" \
-  tmux -u new-session -s claude "$CLAUDE_CMD"
+launch_session() {
+  gosu "$BOT_USER" env HOME="$BOT_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" TELEGRAM_STATE_DIR="$TELEGRAM_STATE_DIR" WORK_DIR="$WORK_DIR" \
+    tmux -u new-session -d -s claude "$CLAUDE_CMD"
+}
+poller_up() {
+  local pid; pid="$(cat "$TELEGRAM_STATE_DIR/bot.pid" 2>/dev/null || true)"
+  [ -n "$pid" ] && [ -d "/proc/$pid" ]
+}
+launch_session
+# v2 startup self-check: give claude --channels ~40s to bring the poller up; if
+# bot.pid never appears (the flaky non-start), restart the session once.
+for _ in $(seq 1 8); do sleep 5; poller_up && break; done
+if ! poller_up; then
+  echo "[entrypoint] poller did not come up in ~40s -> restarting session once"
+  gosu "$BOT_USER" env HOME="$BOT_HOME" tmux kill-session -t claude 2>/dev/null || true
+  sleep 2; launch_session
+fi
+echo "[entrypoint] claude --channels session live; attaching to keep PID 1 alive"
+# Keep PID 1 alive + tie container lifecycle to the tmux session (exit -> container
+# exits -> restart policy respawns -> this self-check runs again).
+exec gosu "$BOT_USER" env HOME="$BOT_HOME" tmux -u attach -t claude
