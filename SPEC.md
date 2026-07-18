@@ -1,65 +1,65 @@
-# SPEC — Claude Telegram Bot, đóng gói Docker ("bot-in-a-box")
+# SPEC — Claude Telegram Bot, packaged as Docker ("bot-in-a-box")
 
-> Trạng thái: **bản spec để review** (chưa code). Mục tiêu: gói toàn bộ một con Claude-Telegram bot thành 1 Docker image chạy được bằng `docker run` / `docker compose up`, truyền token qua biến môi trường, quản trị qua `docker exec`.
-> Cập nhật: 2026-06-26. **Bổ sung §v2.2 (2026-07-19).**
+> Status: **spec for review** (not yet coded). Goal: package an entire Claude-Telegram bot into a single Docker image runnable via `docker run` / `docker compose up`, pass the token through an environment variable, and administer it via `docker exec`.
+> Updated: 2026-06-26. **Added §v2.2 (2026-07-19).**
 
 ---
 
-## §v2.2 — Worker transport (thay thế `--channels`)
+## §v2.2 — Worker transport (replaces `--channels`)
 
-> Từ v2.2, phần transport bên dưới (§2/§6/§7 nói về `claude --channels` + plugin telegram)
-> **bị thay thế** bởi mô hình worker. Các phần access/security/state vẫn đúng về ý niệm nhưng
-> đổi đường dẫn. Thiết kế đầy đủ + quyết định đã chốt: `docs/superpowers/specs/2026-07-19-v2.2-worker-image-design.md`.
+> As of v2.2, the transport layer below (§2/§6/§7, about `claude --channels` + the telegram plugin)
+> is **replaced** by the worker model. The access/security/state sections are still conceptually correct
+> but change paths. Full design + finalized decisions: `docs/superpowers/specs/2026-07-19-v2.2-worker-image-design.md`.
 
-**Vì sao đổi:** poller của `claude --channels` (Claude Code 2.1.214 + plugin telegram) không
-ổn định — hay không start được lúc container start/restart (không có `bot.pid`,
-`pending_update_count` kẹt) dù `mcp list` báo "Connected". Đã xác minh lỗi nằm ở CLI channel
-host của Claude Code, không phải image. Watchdog/retry không trị dứt.
+**Why the change:** the `claude --channels` poller (Claude Code 2.1.214 + telegram plugin) is
+unstable — it often fails to start on container start/restart (no `bot.pid`,
+`pending_update_count` stuck) even though `mcp list` reports "Connected". Verified the bug is in Claude Code's
+CLI channel host, not the image. Watchdog/retry doesn't cure it.
 
-**Kiến trúc v2.2:**
-- Tiến trình chính = **worker Python** (`scripts/tg-worker.py`, stdlib thuần): long-poll
-  `getUpdates` (timeout 50) → cổng `access.json` (DM `allowFrom`; nhóm `requireMention`/
-  `allowFrom`) → react 👀 → gọi headless `claude -p` (`--output-format json`, `--model`,
-  `--permission-mode` đã map, `--allowedTools`, `--append-system-prompt` react-hint,
-  `--resume` theo `chat_id`) → parse `[[react:X]]` → `sendMessage` (chunk ≤3800, quote-reply
-  trong nhóm). Không tmux, không plugin telegram, không cron.
-- **Auth subscription**: worker `env.pop(ANTHROPIC_API_KEY)` → luôn dùng
-  `CLAUDE_CODE_OAUTH_TOKEN`/creds trên volume, không tính tiền theo token.
-- **Layout một volume `~/.claude`** (`/home/botuser/.claude`): config + `plugins/` + creds;
+**v2.2 architecture:**
+- Main process = **Python worker** (`scripts/tg-worker.py`, pure stdlib): long-poll
+  `getUpdates` (timeout 50) → gate on `access.json` (DM `allowFrom`; group `requireMention`/
+  `allowFrom`) → react 👀 → invoke headless `claude -p` (`--output-format json`, `--model`,
+  mapped `--permission-mode`, `--allowedTools`, `--append-system-prompt` react-hint,
+  `--resume` per `chat_id`) → parse `[[react:X]]` → `sendMessage` (chunk ≤3800, quote-reply
+  in groups). No tmux, no telegram plugin, no cron.
+- **Subscription auth**: the worker does `env.pop(ANTHROPIC_API_KEY)` → it always uses
+  the `CLAUDE_CODE_OAUTH_TOKEN`/creds on the volume, not per-token billing.
+- **Single-volume `~/.claude` layout** (`/home/botuser/.claude`): config + `plugins/` + creds;
   `telegram/` (`.env`, `access.json`, `sessions/`, `offset`, `worker.log`, `worker.heartbeat`);
-  `workspace/` (cwd, `reminders/`, `.workspace/`). CHỈ mount `~/.claude` (mount cả
-  `/home/botuser` sẽ che binary claude/bun trong layer image).
-- **Quyền**: `--allowedTools` mặc định = `mcp__mempalace,Read,Grep,Glob,WebFetch,WebSearch`
-  (KHÔNG Bash tự do — an toàn injection cho bot trong nhóm); nới qua `TG_WORKER_ALLOWED_TOOLS`.
-  `PERMISSION_MODE`/`TG_WORKER_PERMISSION_MODE` map sang giá trị `--permission-mode` hợp lệ
+  `workspace/` (cwd, `reminders/`, `.workspace/`). ONLY mount `~/.claude` (mounting all of
+  `/home/botuser` would shadow the claude/bun binaries in the image layer).
+- **Permissions**: `--allowedTools` defaults to `mcp__mempalace,Read,Grep,Glob,WebFetch,WebSearch`
+  (NO free-form Bash — injection-safe for a bot in groups); widen via `TG_WORKER_ALLOWED_TOOLS`.
+  `PERMISSION_MODE`/`TG_WORKER_PERMISSION_MODE` map to valid `--permission-mode` values
   (`default|acceptEdits|bypassPermissions|plan`; `auto`→`acceptEdits`, `manual`→`default`).
-- **Nhắc lịch (reminders)**: một luồng scheduler trong worker quét
-  `~/.claude/workspace/reminders/*.json` mỗi ~45s; `mode:text` → `sendMessage`, `mode:claude`
-  → chạy một lượt `claude -p` rồi gửi output; one-off (`when` ISO) hoặc lặp `daily`/`weekly`
-  (theo TZ container). CLI `tg-reminder add|list|remove` + rule trong CLAUDE.md.
-- **Hỏi-lại qua Telegram (behavioral)**: cần input của owner → gửi câu hỏi như reply rồi kết
-  thúc lượt; tin kế của owner là câu trả lời, phiên tiếp tục nhờ `--resume`. Không
-  AskUserQuestion, không chờ terminal. Ép bằng rule CLAUDE.md.
-- **Entrypoint (root → botuser)**: seed `~/.claude` từ staged defaults lần đầu (cài mới sạch,
-  KHÔNG copy-migrate volume v1), `unset ANTHROPIC_API_KEY`, `exec gosu botuser python3 tg-worker.py`.
-- **Healthcheck**: worker sống (pgrep) + heartbeat tươi. Bỏ check tmux; bỏ `tg-watchdog`.
-- **Bỏ `/etc/claude-code/managed-settings.json`** (chỉ gate `--channels`, nay không dùng).
-- **Image/CI**: ship tag riêng `:v2.2.0` (breaking) + `:v2.2.0-playwright` build FROM base đã
-  tag; **KHÔNG đụng `:latest`** (để recreate bot v1 trên `:latest` không nhảy nhầm sang v2.2).
-- **Di trú**: cài mới sạch từng bot (volume `~/.claude` mới + token + access + mempalace).
-  Rollback = image v1.x cũ.
+- **Reminders**: a scheduler thread in the worker scans
+  `~/.claude/workspace/reminders/*.json` every ~45s; `mode:text` → `sendMessage`, `mode:claude`
+  → run one `claude -p` turn then send its output; one-off (`when` ISO) or recurring `daily`/`weekly`
+  (in the container TZ). CLI `tg-reminder add|list|remove` + a rule in CLAUDE.md.
+- **Ask-back over Telegram (behavioral)**: when owner input is needed → send the question as a reply then end
+  the turn; the owner's next message is the answer, the session continues via `--resume`. No
+  AskUserQuestion, no waiting on a terminal. Enforced by a CLAUDE.md rule.
+- **Entrypoint (root → botuser)**: seed `~/.claude` from staged defaults on first run (clean install,
+  NO copy-migrate of a v1 volume), `unset ANTHROPIC_API_KEY`, `exec gosu botuser python3 tg-worker.py`.
+- **Healthcheck**: worker alive (pgrep) + fresh heartbeat. Drop the tmux check; drop `tg-watchdog`.
+- **Drop `/etc/claude-code/managed-settings.json`** (it only gated `--channels`, now unused).
+- **Image/CI**: ship a separate tag `:v2.2.0` (breaking) + `:v2.2.0-playwright` built FROM the tagged
+  base; **do NOT touch `:latest`** (so recreating a v1 bot on `:latest` doesn't jump to v2.2 by accident).
+- **Migration**: clean install of each bot (fresh `~/.claude` volume + token + access + mempalace).
+  Rollback = the old v1.x image.
 
 ---
 
-## 1. Mục tiêu
+## 1. Goal
 
-Một image duy nhất, chạy lên là có ngay 1 bot Telegram do Claude Code vận hành (nhận DM/nhóm → Claude xử lý → trả lời), **không phải cài tay từng bước**. Mỗi container = 1 bot độc lập (1 token riêng) → nhân bản nhiều bot = chạy nhiều container.
+A single image that, once started, immediately gives you a Telegram bot operated by Claude Code (receive DM/group → Claude processes → replies), **with no step-by-step manual install**. Each container = 1 independent bot (its own token) → cloning multiple bots = running multiple containers.
 
-Phi mục tiêu (ngoài phạm vi v1): web UI quản trị, multi-bot orchestrator, auto-update, scaling ngang nhiều node.
+Non-goals (out of scope for v1): admin web UI, multi-bot orchestrator, auto-update, horizontal scaling across nodes.
 
 ---
 
-## 2. Kiến trúc tổng thể
+## 2. Overall architecture
 
 ```
 docker run / compose
@@ -67,111 +67,111 @@ docker run / compose
    ▼
 ┌─────────────────────────── container ───────────────────────────┐
 │ entrypoint.sh                                                     │
-│   1. validate env (token, api key, owner bắt buộc)               │
-│   2. seed state vào volume nếu chưa có:                          │
+│   1. validate env (token, api key, owner required)              │
+│   2. seed state into the volume if missing:                     │
 │        - $STATE/.env          (TELEGRAM_BOT_TOKEN)               │
 │        - $STATE/access.json   (policy=allowlist, allowFrom=[OWNER])│
 │   3. exec claude --channels plugin:telegram@claude-plugins-official│
-│         (foreground, cần PTY)                                     │
+│         (foreground, needs a PTY)                                │
 │                                                                  │
-│  ~/.claude/plugins  ← telegram plugin ĐÃ bake sẵn trong image    │
+│  ~/.claude/plugins  ← telegram plugin BAKED into the image      │
 │  $STATE (volume)    ← .env, access.json, approved/, bot.pid      │
 └──────────────────────────────────────────────────────────────────┘
-        ▲ docker exec bot tg-access group add <id>   (quản trị)
+        ▲ docker exec bot tg-access group add <id>   (administration)
 ```
 
 ---
 
-## 3. Thành phần image (Dockerfile)
+## 3. Image components (Dockerfile)
 
-- **Base:** `node:22-bookworm-slim` (có node + npm).
-- **bun:** cài qua `curl -fsSL https://bun.sh/install | bash` (hoặc image bun chính thức nếu gọn hơn — quyết lúc POC).
+- **Base:** `node:22-bookworm-slim` (has node + npm).
+- **bun:** installed via `curl -fsSL https://bun.sh/install | bash` (or the official bun image if leaner — decide at POC).
 - **Claude Code CLI:** `npm i -g @anthropic-ai/claude-code`.
-- **Telegram plugin: BAKE sẵn lúc build** (xem §7 — đây là phần cần xác minh kỹ).
-- **tg-access CLI:** copy `scripts/tg-access` vào `/usr/local/bin` (chmod +x).
-- **entrypoint.sh:** copy + chmod +x, đặt làm `ENTRYPOINT`.
-- User: chạy bằng user không phải root (vd `node`) cho an toàn; `$STATE` + `~/.claude` thuộc user đó.
-- `git`, `curl`, `ca-certificates`, `tini` (init reaper) cài kèm.
+- **Telegram plugin: BAKE at build time** (see §7 — this is the part that needs careful verification).
+- **tg-access CLI:** copy `scripts/tg-access` into `/usr/local/bin` (chmod +x).
+- **entrypoint.sh:** copy + chmod +x, set as `ENTRYPOINT`.
+- User: run as a non-root user (e.g. `node`) for safety; `$STATE` + `~/.claude` owned by that user.
+- Install `git`, `curl`, `ca-certificates`, `tini` (init reaper) alongside.
 
 ---
 
-## 4. Biến môi trường (input khi chạy)
+## 4. Environment variables (input at runtime)
 
-| Biến | Bắt buộc | Ý nghĩa |
+| Variable | Required | Meaning |
 |---|---|---|
-| `TELEGRAM_BOT_TOKEN` | ✅ | Token bot từ @BotFather |
-| `OWNER_ID` | ✅ | Telegram user_id chủ bot (1 owner — quyết định §13) → preseed allowlist |
-| `CLAUDE_CONFIG_DIR` | (mặc định `/data/.claude`) | Config + credentials Claude → trỏ vào volume để persist login (§5, §7) |
-| `TELEGRAM_STATE_DIR` | (mặc định `/data/telegram`) | State plugin telegram (token/access), trỏ vào volume |
-| `ANTHROPIC_API_KEY` | ⬜ fallback | Chỉ dùng nếu login paste-code không khả thi (§5) |
-| `MODEL` | ⬜ | Model mặc định (vd `claude-sonnet-4-6`) nếu muốn ép |
-| `TZ` | ⬜ | Timezone (log/giờ) |
-| `MENTION_PATTERNS` | ⬜ | Pattern @mention nếu khác tên bot |
+| `TELEGRAM_BOT_TOKEN` | ✅ | Bot token from @BotFather |
+| `OWNER_ID` | ✅ | Telegram user_id of the bot owner (1 owner — decision §13) → preseed the allowlist |
+| `CLAUDE_CONFIG_DIR` | (default `/data/.claude`) | Claude config + credentials → point at the volume to persist login (§5, §7) |
+| `TELEGRAM_STATE_DIR` | (default `/data/telegram`) | Telegram plugin state (token/access), pointed at the volume |
+| `ANTHROPIC_API_KEY` | ⬜ fallback | Only used if paste-code login isn't feasible (§5) |
+| `MODEL` | ⬜ | Default model (e.g. `claude-sonnet-4-6`) if you want to force one |
+| `TZ` | ⬜ | Timezone (logs/time) |
+| `MENTION_PATTERNS` | ⬜ | @mention pattern if different from the bot name |
 
-> `AUTO_PAIR` đã BỎ khỏi v1 (quyết định §13: preseed-owner only). Có thể thêm lại ở bản sau nếu cần pairing tự động.
+> `AUTO_PAIR` was DROPPED from v1 (decision §13: preseed-owner only). It can be added back later if automatic pairing is needed.
 
-Secrets (token, api key) **không bao giờ** ghi vào image; chỉ truyền runtime qua env / compose / docker secret.
+Secrets (token, api key) are **never** written into the image; they are passed only at runtime via env / compose / docker secret.
 
 ---
 
-## 5. Auth Claude — QUYẾT ĐỊNH: login paste-code (Edward 2026-06-26)
+## 5. Claude auth — DECISION: paste-code login (Edward 2026-06-26)
 
-**Primary = đăng nhập tài khoản Claude qua `docker exec`** (xài subscription của Edward, không cần API key riêng). Lệnh ĐÚNG (đã xác minh ở POC — KHÔNG phải `/login`, đó là lệnh gạch chéo trong giao diện tương tác):
+**Primary = log into a Claude account via `docker exec`** (using Edward's subscription, no separate API key needed). The CORRECT command (verified at POC — NOT `/login`, which is a slash command in the interactive UI):
 
 ```
 docker exec -it <bot> claude auth login
-#   (hoặc token sống lâu: docker exec -it <bot> claude setup-token)
-#   kiểm tra: docker exec <bot> claude auth status
+#   (or a long-lived token: docker exec -it <bot> claude setup-token)
+#   check: docker exec <bot> claude auth status
 ```
-→ in **URL OAuth** → mở web authorize → lấy **mã** → **dán lại vào chính phiên đó**. Credentials lưu vào **volume** qua `CLAUDE_CONFIG_DIR=/data/.claude` → **khởi động lại không phải đăng nhập lại**.
+→ prints an **OAuth URL** → open the web authorize page → get the **code** → **paste it back into that same session**. Credentials are saved to the **volume** via `CLAUDE_CONFIG_DIR=/data/.claude` → **no re-login on restart**.
 
-- ⚠️ **Bắt buộc `-it`** (phiên tương tác có TTY thật). Đã xác minh: lệnh `claude auth login`/`setup-token` tồn tại; nhưng luồng OAuth (dán mã vs redirect trình duyệt) bên trong container cần Edward chạy `-it` với tài khoản anh để chốt — không tự test headless được.
-- **Phương án dự phòng = `ANTHROPIC_API_KEY`** (biến môi trường): nếu đăng nhập tương tác không khả thi. Đơn giản, không cần tương tác, nhưng chi phí tính theo key.
+- ⚠️ **`-it` is required** (an interactive session with a real TTY). Verified: the `claude auth login`/`setup-token` commands exist; but the OAuth flow (paste code vs browser redirect) inside the container needs Edward to run `-it` with his account to finalize — it can't be tested headless.
+- **Fallback = `ANTHROPIC_API_KEY`** (env var): if interactive login isn't feasible. Simple, no interaction needed, but billed per key.
 
-→ v1 ưu tiên **login paste-code**; API key là phương án dự phòng. Lưu ý: credentials nằm trên volume → ai có quyền vào volume = có session đăng nhập, bảo vệ volume tương ứng.
+→ v1 prioritizes **paste-code login**; the API key is the fallback. Note: credentials live on the volume → anyone with access to the volume has the logged-in session, so protect the volume accordingly.
 
 ---
 
-## 6. Mô hình tiến trình & PTY
+## 6. Process model & PTY
 
-- `claude --channels ...` là **phiên TUI tương tác**, không phải daemon. Cần cấp **pseudo-TTY**:
+- `claude --channels ...` is an **interactive TUI session**, not a daemon. It needs a **pseudo-TTY**:
   - compose: `tty: true` + `stdin_open: true`
-  - docker run: `-it` (hoặc `-d -it`)
-- Chạy **foreground** làm PID 1 (qua `tini` để reap zombie + nhận tín hiệu).
-- `restart: unless-stopped` (compose) → bot rớt thì tự dựng lại.
-- **1 token = 1 container.** Telegram chỉ cho 1 poller/token; 2 container cùng token → 409 Conflict, cướp update của nhau. Image không tự bảo vệ điều này → ghi rõ trong README.
-- Đổi token = phải restart container (token đọc 1 lần lúc boot).
+  - docker run: `-it` (or `-d -it`)
+- Run **foreground** as PID 1 (via `tini` to reap zombies + receive signals).
+- `restart: unless-stopped` (compose) → the bot restarts itself if it drops.
+- **1 token = 1 container.** Telegram allows only one poller per token; two containers on the same token → 409 Conflict, stealing each other's updates. The image doesn't protect against this → document it clearly in the README.
+- Changing the token requires restarting the container (the token is read once at boot).
 
 ---
 
-## 7. Bake telegram plugin (cần xác minh khi POC)
+## 7. Bake the telegram plugin (verify at POC)
 
-Plugin bình thường cài qua `/plugin` (tương tác) → không hợp build headless. Hai hướng, **xác minh hướng nào chạy được ở bước POC** (chưa chắc 100% — sẽ kiểm thực tế):
+The plugin normally installs via `/plugin` (interactive) → not suitable for a headless build. Two approaches, **verify which one works at the POC step** (not 100% certain — will test for real):
 
-- **(A)** Chạy lệnh cài plugin **non-interactive lúc build** (nếu Claude CLI hỗ trợ cờ kiểu `claude plugin add` / marketplace add headless) → kết quả nằm ở `~/.claude/plugins` + config marketplace → commit vào layer image.
-- **(B)** Bake **thủ công**: thêm marketplace `claude-plugins-official` + copy/seed cây `~/.claude/plugins/<telegram>` + ghi file config "installed plugins" mà Claude đọc lúc boot.
+- **(A)** Run a plugin-install command **non-interactively at build time** (if the Claude CLI supports a flag like `claude plugin add` / headless marketplace add) → the result lands in `~/.claude/plugins` + marketplace config → commit into the image layer.
+- **(B)** Bake **manually**: add the `claude-plugins-official` marketplace + copy/seed the `~/.claude/plugins/<telegram>` tree + write the "installed plugins" config file that Claude reads at boot.
 
-Ràng buộc: plugin baked phải khớp version Claude CLI cài trong image (pin version để khỏi vỡ). Plugin set `TELEGRAM_STATE_DIR` để state nằm ở volume (giống cơ chế repo hiện tại).
+Constraint: the baked plugin must match the Claude CLI version installed in the image (pin the version so it doesn't break). The plugin sets `TELEGRAM_STATE_DIR` so state lives on the volume (same mechanism as the current repo).
 
-**Tương tác với volume (vì §5 chốt `CLAUDE_CONFIG_DIR=/data/.claude` nằm trên volume):** plugin baked nằm trong layer image (vd staging `/opt/claude-plugins`), nhưng config dir lại ở volume. → **entrypoint seed lần đầu**: nếu `$CLAUDE_CONFIG_DIR/plugins` trống thì copy plugin + marketplace config từ staging vào volume. Nhờ vậy cả **plugin + credentials login** cùng persist trên volume; lần chạy sau không seed lại, không phải login lại.
+**Interaction with the volume (since §5 fixes `CLAUDE_CONFIG_DIR=/data/.claude` on the volume):** the baked plugin lives in the image layer (e.g. staged at `/opt/claude-plugins`), but the config dir is on the volume. → **entrypoint seeds on first run**: if `$CLAUDE_CONFIG_DIR/plugins` is empty, copy the plugin + marketplace config from the staging area into the volume. That way both the **plugin + login credentials** persist on the volume; subsequent runs don't re-seed and don't re-login.
 
-> ⚠️ Phần này là rủi ro kỹ thuật cao nhất của dự án — POC nên làm §7 (bake + seed) cùng §5 (login paste-code) TRƯỚC để chốt, rồi mới ráp phần còn lại.
+> ⚠️ This is the project's highest technical risk — the POC should do §7 (bake + seed) together with §5 (paste-code login) FIRST to lock them down, then assemble the rest.
 
 ---
 
-## 8. Mô hình access & bảo mật (cốt lõi)
+## 8. Access & security model (core)
 
-**Mặc định an toàn = preseed owner, KHÔNG pairing.**
+**Safe default = preseed owner, NO pairing.**
 
-- entrypoint seed `access.json`: `dmPolicy = allowlist`, `allowFrom = [OWNER_ID]`.
-- → Owner dùng được ngay, người lạ bị bỏ qua, **không cần bước pairing**.
-- Đây thay cho ý "auto-whitelist sau pairing".
+- entrypoint seeds `access.json`: `dmPolicy = allowlist`, `allowFrom = [OWNER_ID]`.
+- → Owner works immediately, strangers are ignored, **no pairing step needed**.
+- This replaces the "auto-whitelist after pairing" idea.
 
-**Vì sao KHÔNG auto-whitelist-sau-pairing mặc định:** pairing có bước người duyệt chính là lớp chống injection/spam. Auto-approve = ai DM cũng vào → bot mở toang.
+**Why NOT auto-whitelist-after-pairing by default:** the pairing step, with a human approving, is exactly the anti-injection/spam layer. Auto-approve = anyone who DMs gets in → the bot is wide open.
 
-- Nếu vẫn muốn pairing tự động: cờ **`AUTO_PAIR=true`** (opt-in), có **cảnh báo log rõ ràng**, và nên giới hạn (vd chỉ auto-approve user ĐẦU TIÊN rồi tự khoá `policy=allowlist`). Mặc định OFF.
+- If you still want automatic pairing: the flag **`AUTO_PAIR=true`** (opt-in), with a **clear log warning**, and it should be limited (e.g. only auto-approve the FIRST user then lock itself to `policy=allowlist`). Default OFF.
 
-**Thêm/sửa access KHÔNG qua chat** (chống prompt-injection) — chỉ qua `docker exec` (kênh host đã xác thực):
+**Add/edit access is NOT via chat** (anti-prompt-injection) — only via `docker exec` (the authenticated host channel):
 
 ```
 docker exec <bot> tg-access status
@@ -180,102 +180,102 @@ docker exec <bot> tg-access remove <userId>
 docker exec <bot> tg-access group add <groupId> [--allow id1,id2] [--no-mention]
 docker exec <bot> tg-access group rm <groupId>
 docker exec <bot> tg-access policy <pairing|allowlist|disabled>
-docker exec <bot> tg-access pair <code>     # khi AUTO_PAIR=false, duyệt tay
+docker exec <bot> tg-access pair <code>     # when AUTO_PAIR=false, approve manually
 ```
 
-`tg-access` = script sửa `$STATE/access.json` theo đúng schema plugin (server đọc lại theo từng tin → hiệu lực ngay, không restart).
+`tg-access` = a script that edits `$STATE/access.json` per the plugin schema (the server re-reads it per message → effective immediately, no restart).
 
 ---
 
 ## 9. State & persistence
 
-- `TELEGRAM_STATE_DIR=/data` → **mount volume** (`-v botdata:/data` hoặc bind mount).
-- Nội dung: `.env` (token), `access.json` (policy + allowlist + groups), `approved/<id>` (marker), `bot.pid`.
-- Volume giúp: giữ access qua restart + `docker exec tg-access` sửa được + backup dễ.
-- `~/.claude` (plugin + config) nằm trong image (read-mostly); chỉ state động ra volume.
+- `TELEGRAM_STATE_DIR=/data` → **mount a volume** (`-v botdata:/data` or a bind mount).
+- Contents: `.env` (token), `access.json` (policy + allowlist + groups), `approved/<id>` (marker), `bot.pid`.
+- The volume gives you: access persists across restarts + `docker exec tg-access` can edit it + easy backup.
+- `~/.claude` (plugin + config) lives in the image (read-mostly); only dynamic state goes to the volume.
 
 ---
 
-## 10. Cấu trúc thư mục dự án
+## 10. Project directory structure
 
 ```
 claude-telegram-docker/
-├── SPEC.md                  ← (file này)
-├── README.md                ← build & run, ví dụ lệnh
+├── SPEC.md                  ← (this file)
+├── README.md                ← build & run, example commands
 ├── Dockerfile
-├── docker-compose.yml       ← ví dụ 1 bot (env + volume + tty + restart)
-├── docker-compose.multi.yml ← ví dụ nhiều bot (mỗi service 1 token/volume)
+├── docker-compose.yml       ← example of 1 bot (env + volume + tty + restart)
+├── docker-compose.multi.yml ← example of multiple bots (each service = 1 token/volume)
 ├── entrypoint.sh            ← validate env → seed state → exec claude --channels
 ├── scripts/
-│   └── tg-access            ← CLI quản trị access (docker exec)
-├── .env.example             ← mẫu biến (không commit .env thật)
+│   └── tg-access            ← access admin CLI (docker exec)
+├── .env.example             ← env template (do not commit the real .env)
 └── .dockerignore
 ```
 
 ---
 
-## 11. Build & chạy (dự kiến)
+## 11. Build & run (planned)
 
 ```bash
 # build
 docker build -t claude-telegram-docker .
 
-# chạy 1 bot (token + owner; auth login ở bước sau)
+# run 1 bot (token + owner; auth login in a later step)
 docker run -d --name mybot -it --restart unless-stopped \
   -e TELEGRAM_BOT_TOKEN=*** -e OWNER_ID=<your-telegram-user-id> \
   -v mybot-data:/data \
   claude-telegram-docker
 
-# login Claude (1 lần) — setup-token IN RA token, KHÔNG tự lưu creds:
+# log into Claude (once) — setup-token PRINTS a token, does NOT save creds itself:
 docker exec -it mybot claude setup-token
-#   → mở URL in ra, authorize, paste FULL code; nó in ra token sống-lâu (1 năm).
-# Nhét token vào env rồi RECREATE (restart KHÔNG nạp lại env → vẫn loggedIn:false):
-#   thêm  CLAUDE_CODE_OAUTH_TOKEN=<token-vừa-in>  vào .env, rồi:
+#   → open the printed URL, authorize, paste the FULL code; it prints a long-lived token (1 year).
+# Put the token in env then RECREATE (restart does NOT reload env → still loggedIn:false):
+#   add  CLAUDE_CODE_OAUTH_TOKEN=<the-token-just-printed>  to .env, then:
 docker compose up -d
-docker exec mybot claude auth status   # loggedIn:true là xong
+docker exec mybot claude auth status   # loggedIn:true means done
 
-# thêm 1 nhóm
+# add a group
 docker exec mybot tg-access group add <group-id>
 
-# xem access
+# view access
 docker exec mybot tg-access status
 ```
 
-> Fallback nếu paste-code không chạy được: thêm `-e ANTHROPIC_API_KEY=***` lúc `docker run`, bỏ bước `claude /login`.
+> Fallback if paste-code doesn't work: add `-e ANTHROPIC_API_KEY=***` at `docker run`, skip the `claude /login` step.
 
-compose: `docker compose up -d` với file có sẵn env/volume/tty.
-
----
-
-## 12. Bảo mật (checklist)
-
-- Secrets chỉ runtime (env / docker secret), **không bake vào image**, không commit `.env`.
-- `OWNER_ID` preseed + `allowlist` → bot owner-only ngay từ boot.
-- Access mutation chỉ qua `docker exec` (host), **không qua tin Telegram**.
-- 1 API key/bot nếu muốn tách billing + giảm bán kính rủi ro khi lộ.
-- Container chạy non-root + read-only rootfs (nếu khả thi) + chỉ `/data` ghi được.
-- `AUTO_PAIR` mặc định OFF; bật phải hiểu rủi ro.
-- Plugin/CLI version PIN để build tái lập (reproducible).
+compose: `docker compose up -d` with a file that has env/volume/tty ready.
 
 ---
 
-## 13. Quyết định (Edward chốt 2026-06-26)
+## 12. Security (checklist)
 
-1. **Auth:** ✅ **Login paste-code qua `docker exec` (primary)**, xài subscription Claude; `ANTHROPIC_API_KEY` = fallback. Creds persist trên volume. (§5)
-2. **Base image:** ✅ **`node:22-slim` + cài bun** (bun bắt buộc vì plugin telegram chạy server bằng bun).
-3. **Pairing:** ✅ **Preseed-owner only**, KHÔNG `AUTO_PAIR` ở v1.
-4. **Phân phối:** ✅ **Build local test trước**, ổn thì lên **GHCR** (CI defer).
-5. **Tên image:** ✅ **`claude-telegram-docker`**.
-6. **Owner:** ✅ **1 owner** (`OWNER_ID` đơn, không list).
+- Secrets only at runtime (env / docker secret), **never baked into the image**, never commit `.env`.
+- `OWNER_ID` preseed + `allowlist` → owner-only bot from boot.
+- Access mutations only via `docker exec` (host), **never via a Telegram message**.
+- 1 API key per bot if you want to separate billing + reduce the blast radius when leaked.
+- Container runs non-root + read-only rootfs (if feasible) + only `/data` writable.
+- `AUTO_PAIR` default OFF; enabling it means understanding the risk.
+- PIN plugin/CLI versions for reproducible builds.
 
 ---
 
-## 14. Rủi ro & thứ tự làm (POC)
+## 13. Decisions (Edward finalized 2026-06-26)
 
-1. **§7 bake plugin** (rủi ro cao nhất) → POC chứng minh trước.
-2. **§6 PTY + auth** → claude --channels sống được trong container, nhận được tin test.
-3. **§8 entrypoint seed + tg-access** → owner-only chạy ngay, exec thêm id được.
-4. Ráp Dockerfile + compose + README.
-5. (Tuỳ chọn) push GHCR + CI build.
+1. **Auth:** ✅ **Paste-code login via `docker exec` (primary)**, using the Claude subscription; `ANTHROPIC_API_KEY` = fallback. Creds persist on the volume. (§5)
+2. **Base image:** ✅ **`node:22-slim` + install bun** (bun is required because the telegram plugin runs its server on bun).
+3. **Pairing:** ✅ **Preseed-owner only**, NO `AUTO_PAIR` in v1.
+4. **Distribution:** ✅ **Build & test locally first**, then push to **GHCR** once stable (CI deferred).
+5. **Image name:** ✅ **`claude-telegram-docker`**.
+6. **Owner:** ✅ **1 owner** (single `OWNER_ID`, not a list).
 
-> Khi xác minh bất kỳ hành vi nào của Claude CLI / plugin mà chưa chắc → kiểm thực tế ở POC, không phỏng đoán đưa vào tài liệu.
+---
+
+## 14. Risks & order of work (POC)
+
+1. **§7 bake plugin** (highest risk) → prove it at POC first.
+2. **§6 PTY + auth** → claude --channels stays alive in the container, receives test messages.
+3. **§8 entrypoint seed + tg-access** → owner-only works immediately, exec can add more ids.
+4. Assemble Dockerfile + compose + README.
+5. (Optional) push to GHCR + CI build.
+
+> When verifying any Claude CLI / plugin behavior that isn't certain → test it for real at the POC, don't put guesses into the docs.

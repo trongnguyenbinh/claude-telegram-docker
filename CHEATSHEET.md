@@ -58,9 +58,9 @@ v2.2 transport = the Python worker `tg-worker.py` (no tmux, no `--channels`). Si
 
 | Task | Command |
 |---|---|
-| One-off | `docker exec -u botuser <bot> tg-reminder add --chat <id> --text "Họp" --at 2026-07-20T08:00` |
-| Daily | `docker exec -u botuser <bot> tg-reminder add --chat <id> --text "Uống nước" --daily 15:00` |
-| Weekly (claude turn) | `docker exec -u botuser <bot> tg-reminder add --chat <id> --prompt "Tóm tắt tin AI" --weekly mon 09:00` |
+| One-off | `docker exec -u botuser <bot> tg-reminder add --chat <id> --text "Meeting" --at 2026-07-20T08:00` |
+| Daily | `docker exec -u botuser <bot> tg-reminder add --chat <id> --text "Drink water" --daily 15:00` |
+| Weekly (claude turn) | `docker exec -u botuser <bot> tg-reminder add --chat <id> --prompt "Summarize AI news" --weekly mon 09:00` |
 | List | `docker exec -u botuser <bot> tg-reminder list` |
 | Remove | `docker exec -u botuser <bot> tg-reminder remove <id>` |
 
