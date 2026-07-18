@@ -11,7 +11,12 @@ set -u
 BOT_USER="${BOT_USER:-botuser}"
 STATE_DIR="${TELEGRAM_STATE_DIR:-/home/botuser/.claude/channels/telegram}"
 FLAG=/tmp/tg-watchdog.count
+DEADFLAG=/tmp/tg-watchdog.dead
 LOG=/tmp/tg-watchdog.log
+
+# v2: stand down while the entrypoint's startup self-check is actively (re)launching
+# the session — otherwise we'd kill the session it's managing mid-boot.
+[ -f /tmp/tg-startup.lock ] && exit 0
 
 g() { if [ "$(id -u)" = "0" ] && command -v gosu >/dev/null 2>&1; then gosu "$BOT_USER" "$@"; else "$@"; fi; }
 
@@ -19,18 +24,25 @@ TOK=$(sed -n 's/^TELEGRAM_BOT_TOKEN=//p' "$STATE_DIR/.env" 2>/dev/null | head -1
 [ -z "$TOK" ] && exit 0
 
 # v2: a DEAD poller (bun channels server never started / crashed) shows no live
-# bot.pid. Sending Enter can't help — the poller isn't running. Restart the session:
-# killing it makes the entrypoint's `tmux attach` exit → PID 1 exits → restart policy
-# respawns the container → the startup self-check brings the poller back up.
+# bot.pid. Sending Enter can't help — the poller isn't running. Require it dead for
+# 2 consecutive checks (avoid a transient blip), then kill the session: the
+# entrypoint's `tmux attach` exits → PID 1 exits → restart policy respawns the
+# container → the LOOPED startup self-check brings the poller back up.
 PID="$(cat "$STATE_DIR/bot.pid" 2>/dev/null || true)"
 if [ -z "$PID" ] || [ ! -d "/proc/$PID" ]; then
   if g tmux has-session -t claude 2>/dev/null; then
-    echo "$(date -u +%FT%TZ) tg-watchdog: poller DEAD (bot.pid='$PID') -> restarting claude session" >> "$LOG"
-    g tmux kill-session -t claude 2>/dev/null || true
+    if [ -f "$DEADFLAG" ]; then
+      echo "$(date -u +%FT%TZ) tg-watchdog: poller DEAD 2x (bot.pid='$PID') -> killing claude session (container will respawn)" >> "$LOG"
+      g tmux kill-session -t claude 2>/dev/null || true
+      rm -f "$DEADFLAG"
+    else
+      : > "$DEADFLAG"
+    fi
   fi
   rm -f "$FLAG"
   exit 0
 fi
+rm -f "$DEADFLAG"
 
 P=$(curl -fsS --max-time 15 "https://api.telegram.org/bot$TOK/getWebhookInfo" 2>/dev/null | sed -n 's/.*"pending_update_count":\([0-9]*\).*/\1/p')
 [ -z "$P" ] && exit 0

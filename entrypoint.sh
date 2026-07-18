@@ -212,15 +212,25 @@ poller_up() {
   local pid; pid="$(cat "$TELEGRAM_STATE_DIR/bot.pid" 2>/dev/null || true)"
   [ -n "$pid" ] && [ -d "/proc/$pid" ]
 }
-launch_session
-# v2 startup self-check: give claude --channels ~40s to bring the poller up; if
-# bot.pid never appears (the flaky non-start), restart the session once.
-for _ in $(seq 1 8); do sleep 5; poller_up && break; done
-if ! poller_up; then
-  echo "[entrypoint] poller did not come up in ~40s -> restarting session once"
+# v2 startup self-check (LOOPED): claude 2.1.214's --channels telegram poller is
+# flaky on start — it often fails to begin polling (no bot.pid). Retry the whole
+# session up to 6 times, waiting ~35s each, until bot.pid appears. Empirically one
+# restart isn't enough (the failure is ~50/50), so we loop.
+# Marker: tell tg-watchdog to stand down while we're actively managing the session
+# during startup (else it would kill the session mid-self-check).
+: > /tmp/tg-startup.lock
+POLLER_OK=0
+for attempt in $(seq 1 6); do
+  echo "[entrypoint] launching claude --channels session (attempt $attempt/6)"
   gosu "$BOT_USER" env HOME="$BOT_HOME" tmux kill-session -t claude 2>/dev/null || true
-  sleep 2; launch_session
-fi
+  sleep 1
+  launch_session
+  for _ in $(seq 1 7); do sleep 5; poller_up && { POLLER_OK=1; break; }; done
+  [ "$POLLER_OK" = 1 ] && { echo "[entrypoint] poller up on attempt $attempt (bot.pid=$(cat "$TELEGRAM_STATE_DIR/bot.pid" 2>/dev/null))"; break; }
+  echo "[entrypoint] poller not up after attempt $attempt (~35s) -> retrying"
+done
+[ "$POLLER_OK" != 1 ] && echo "[entrypoint] WARN poller still not up after 6 attempts -> attaching anyway; tg-watchdog will keep trying"
+rm -f /tmp/tg-startup.lock   # startup done → tg-watchdog may act from here on
 echo "[entrypoint] claude --channels session live; attaching to keep PID 1 alive"
 # Keep PID 1 alive + tie container lifecycle to the tmux session (exit -> container
 # exits -> restart policy respawns -> this self-check runs again).
