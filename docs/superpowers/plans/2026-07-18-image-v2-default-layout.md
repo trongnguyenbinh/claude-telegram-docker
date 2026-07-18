@@ -363,6 +363,10 @@ git commit -m "docs: v2 default ~/.claude layout + manual migration runbook"
 
 ---
 
+## Backlog — v2.1 (deferred, Edward 2026-07-18)
+
+**Persistent bot reminders / cron.** The cron daemon already runs in every container (entrypoint 6b), so a bot can technically schedule a Bot-API `sendMessage` at a fixed time today — but (a) there is no convenient add/list/remove tool, and (b) cron entries live in the container FS, not on the `~/.claude` volume, so they are LOST on recreate. v2.1: store reminder definitions under `~/.claude/workspace/reminders/`, have the entrypoint reload them into cron on boot (survives recreate), and add a small helper + guidance so a bot can manage user reminders ("nhắc 8h sáng mỗi ngày") cleanly. NOT part of v2 (which is layout + poller reliability only).
+
 ## Self-Review
 
 - **Spec coverage:** §3 decisions → Task1 (layout+managed-settings), Task2 (botuser/auto/creds), Task5-6 (self-heal), Task6 (manual migration), Task7 (rollout/docs). §4 layout → Task2. §5 manual migration → Task6 Step2. §6 self-heal → Task3+4+5. §7 permission/token → Task2 Step2+4. §8 rollout → Task6+7. All covered.
