@@ -51,6 +51,44 @@ CLI channel host, not the image. Watchdog/retry doesn't cure it.
 
 ---
 
+## §v2.3 — Media handling + baked voice MCP + MarkdownV2 (2026-07-19)
+
+Extends the v2.2 worker. Ships `:v2.3.0` / `:v2.3.0-playwright`; **does not move `:latest`**
+(same gating as v2.2). Fresh env vars: `VOICE_API_URL`, `VOICE_API_KEY` (both required to enable voice).
+
+- **Inbound media** — `handle_message` now detects attachments *before* the text guard (which
+  previously dropped every photo/voice/document). `detect_attachment(msg)` resolves, in priority:
+  `photo` (largest size) → `document` → `voice`/`audio`. The worker downloads via
+  `download_tg_file()` (getFile → `api.telegram.org/file/bot<token>/<path>`) into
+  `~/.claude/workspace/inbox/`, then builds the effective prompt:
+  - **photo** → caption (if any) + a note with the abs path + "use Read to view". Claude's
+    built-in Read renders images (already in the default allowedTools), so ALL bots handle images.
+  - **document** → caption + note with path + "use Read to read".
+  - **voice/audio** → **if** voice is configured, base64 the file → `POST {VOICE_API_URL}/transcribe`
+    (`Authorization: Bearer`, `{audio_base64, language}`) → `.text` becomes the prompt + a note it
+    was speech. **Else** reply once "voice not enabled" and skip. Transcription is done by the worker,
+    with a timeout + graceful fallback (never crashes the loop).
+  - Guard now: proceed if text OR caption OR a supported attachment; only skip when nothing + `cid` is None.
+- **Voice output (`[[voice]]`)** — mirrors `[[react:X]]`. A reply beginning with `[[voice]]` (after
+  react parsing) → `POST {VOICE_API_URL}/speak {text, lang}` → download the returned Ogg URL →
+  `sendVoice` (multipart, stdlib) as a native voice bubble. Marker is stripped always; voice path is
+  taken only when voice is configured; any voice error falls back to sending text.
+- **Baked voice MCP** — `vendor/voice_mcp_proxy/` (stdio MCP: transcribe/speak/list_voices/voice_info)
+  copied to `/opt/voice-mcp-proxy`; image installs `python3-pip` + `mcp>=1.2` + `httpx`. Entrypoint
+  auto-registers it for botuser (`claude mcp add voice --scope user … -- python3 -m voice_mcp_proxy`,
+  idempotent) **iff** both voice env vars are set. Inbound transcription + `[[voice]]` don't need the
+  MCP (worker calls the API directly); add `mcp__voice` to `TG_WORKER_ALLOWED_TOOLS` to let Claude
+  call the tools directly.
+- **MarkdownV2 rendering** — the send path renders each chunk with `to_markdownv2()` (tokenize code
+  vs non-code; escape all MV2 specials in non-code, keep ` ``` ` / `` ` `` code literal so commands
+  become tap-to-copy; `**bold**`/`_italic_` render). `sendMessage` uses `parse_mode=MarkdownV2`; on any
+  API error it **retries the same chunk as plain text** so a reply always lands. `split_chunks()` breaks
+  on paragraph/line boundaries (keeps a fence whole where possible). Replaces v1's `tg-markdownv2-guard.py`.
+- **Layout add**: `~/.claude/workspace/inbox/` (downloaded attachments) + `outbox/` (synthesized Ogg).
+- **Image size**: base ≈ +65 MB (python3-pip ~45 MB + mcp/httpx deps ~22 MB + tiny proxy).
+
+---
+
 ## 1. Goal
 
 A single image that, once started, immediately gives you a Telegram bot operated by Claude Code (receive DM/group → Claude processes → replies), **with no step-by-step manual install**. Each container = 1 independent bot (its own token) → cloning multiple bots = running multiple containers.
@@ -105,6 +143,8 @@ docker run / compose
 | `TELEGRAM_STATE_DIR` | (default `/data/telegram`) | Telegram plugin state (token/access), pointed at the volume |
 | `ANTHROPIC_API_KEY` | ⬜ fallback | Only used if paste-code login isn't feasible (§5) |
 | `MODEL` | ⬜ | Default model (e.g. `claude-sonnet-4-6`) if you want to force one |
+| `VOICE_API_URL` | ⬜ (v2.3) | Voice API base URL (e.g. `https://voice.veasy.vn`). Set with `VOICE_API_KEY` to enable voice STT/TTS + auto-register the `voice` MCP |
+| `VOICE_API_KEY` | ⬜ (v2.3) | Per-bot Voice API bearer key (`vsk_…`) |
 | `TZ` | ⬜ | Timezone (logs/time) |
 | `MENTION_PATTERNS` | ⬜ | @mention pattern if different from the bot name |
 

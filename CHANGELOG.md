@@ -1,5 +1,38 @@
 # Changelog
 
+## v2.3.0 — media handling (images, voice, documents) + baked voice MCP
+
+Ships as `:v2.3.0` / `:v2.3.0-playwright`; does **not** move `:latest` (same gating
+as v2.2 — a `v*` tag push publishes the version tag only). Builds on the v2.2 worker.
+
+- **New — inbound media** (previously the worker silently skipped any non-text message):
+  - **Images** — downloaded to `~/.claude/workspace/inbox/`; the prompt points Claude at
+    the path and it views the image with the built-in **Read** tool (works with any bot;
+    no extra tools needed).
+  - **Documents** — downloaded to `inbox/`; Claude reads them with **Read**.
+  - **Voice / audio** — transcribed to text via the Voice API (`POST /transcribe`) inside
+    the worker; Claude receives the transcript. If no Voice API is configured, the bot
+    replies once that voice isn't enabled and skips (never crashes the loop).
+- **New — voice replies (`[[voice]]`)**: when the Voice API is configured, a reply that
+  begins with `[[voice]]` is synthesized (`POST /speak`) and sent as a Telegram **voice
+  bubble** (`sendVoice`); on any voice error it falls back to sending the text. Mirrors
+  the `[[react:X]]` convention.
+- **New — baked voice MCP**: the stdio `voice_mcp_proxy` (tools transcribe/speak/
+  list_voices/voice_info) is vendored into the image and auto-registered for the bot by
+  the entrypoint **when `VOICE_API_URL` + `VOICE_API_KEY` are set** — no manual
+  `claude mcp add`. (To let Claude call those tools directly, add `mcp__voice` to
+  `TG_WORKER_ALLOWED_TOOLS`; inbound transcription + `[[voice]]` output work without it.)
+- **New — MarkdownV2 reply rendering**: the worker now sends replies as MarkdownV2, so
+  Claude's ` ```code``` ` / `` `inline` `` become tap-to-copy and `**bold**`/`_italic_`
+  render. A stdlib `to_markdownv2()` sanitizer tokenizes code vs non-code and escapes all
+  MarkdownV2 specials in non-code regions; on a parse error it retries the message as
+  **plain text** so a reply always gets through. This replaces the old v1 `tg-markdownv2-guard.py`
+  hook (which hooked the now-removed telegram-plugin reply tool).
+- **New env vars**: `VOICE_API_URL` (e.g. `https://voice.veasy.vn`) and `VOICE_API_KEY`
+  (`vsk_...` per-bot key). Both must be set to enable voice STT/TTS; unset = voice off.
+- **Image size**: base grows ≈ **+65 MB** (`python3-pip` ~45 MB + `mcp`/`httpx` deps ~22 MB +
+  the tiny vendored proxy). The playwright variant inherits the base unchanged.
+
 ## v2.2.0 — worker transport (replaces `--channels`)
 
 **Breaking.** Ships as `:v2.2.0` / `:v2.2.0-playwright`; does not move `:latest`.

@@ -153,6 +153,29 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   fi
 fi
 
+# 5b) Voice MCP auto-wire. If VOICE_API_URL + VOICE_API_KEY are set, register the
+#     BAKED stdio voice proxy for botuser (idempotent). The bot then gets the
+#     `voice` MCP tool (transcribe / speak / list_voices / voice_info) with no
+#     manual pip/copy. NOTE: the worker already does inbound transcription and the
+#     [[voice]] outbound reply itself via the Voice API — this MCP is only needed
+#     when you want CLAUDE to call the voice tools directly (then also add
+#     mcp__voice to TG_WORKER_ALLOWED_TOOLS).
+if [ -n "${VOICE_API_URL:-}" ] && [ -n "${VOICE_API_KEY:-}" ]; then
+  if gosu "$BOT_USER" env HOME="$BOT_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
+       claude mcp get voice >/dev/null 2>&1; then
+    echo "[entrypoint] voice MCP already registered — skipping"
+  elif gosu "$BOT_USER" env HOME="$BOT_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
+         claude mcp add voice --scope user \
+           --env VOICE_API_URL="$VOICE_API_URL" \
+           --env VOICE_API_KEY="$VOICE_API_KEY" \
+           --env PYTHONPATH=/opt/voice-mcp-proxy \
+           -- python3 -m voice_mcp_proxy >/dev/null 2>&1; then
+    echo "[entrypoint] registered voice MCP for $BOT_USER (VOICE_API_URL set)"
+  else
+    echo "[entrypoint] WARN: could not register voice MCP (continuing without it)"
+  fi
+fi
+
 # 6) Force the Claude subscription for every `claude -p` turn (never a metered key).
 unset ANTHROPIC_API_KEY
 

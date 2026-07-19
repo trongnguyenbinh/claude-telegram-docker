@@ -40,9 +40,24 @@ is intentionally ignored). Run `claude` / `tg-access` with `-u botuser`.
 | `MODEL` | – | e.g. `sonnet` |
 | `TG_WORKER_ALLOWED_TOOLS` | – | tool allowlist; default excludes free Bash |
 | `BOT_ROLE` | – | `ba` / `planner` / `dev-fe` / `dev-be` / `tester` / `infra` |
+| `VOICE_API_URL` | – | Voice API base URL (e.g. `https://voice.veasy.vn`) — enables voice |
+| `VOICE_API_KEY` | – | per-bot Voice API key (`vsk_…`); set with `VOICE_API_URL` |
 | `TZ` | – | default `Asia/Ho_Chi_Minh` |
 
 Full variable list + volume layout in [`SPEC.md`](./SPEC.md).
+
+## Media (images, voice, documents)
+
+The bot handles attachments out of the box:
+
+- **Images** → Claude views them with its built-in `Read` tool.
+- **Documents** (PDF/code/text) → Claude reads them with `Read`.
+- **Voice / audio** → transcribed to text **when `VOICE_API_URL` + `VOICE_API_KEY` are set**
+  (via an external [voice-service](https://github.com/trongnguyenbinh/voice-service) Voice API).
+
+With voice configured, the bot can also **reply as a voice bubble**: Claude starts its reply
+with `[[voice]]` and the worker synthesizes + sends it (great for pronunciation/tutor bots).
+Setting the two voice vars also auto-registers a baked `voice` MCP tool for the bot.
 
 ## Access control
 

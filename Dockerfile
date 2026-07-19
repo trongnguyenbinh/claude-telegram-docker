@@ -1,7 +1,10 @@
-# Claude Telegram Bot — "bot-in-a-box" (v2.2, WORKER transport).
-# 1 image = 1 bot. See SPEC.md §v2.2.
+# Claude Telegram Bot — "bot-in-a-box" (v2.3, WORKER transport + media).
+# 1 image = 1 bot. See SPEC.md §v2.2/§v2.3.
 #
-# v2.2 drops `claude --channels` (its CLI channel-host poller was unreliable) and
+# v2.3 adds media handling (inbound photos/documents via the Read tool, voice via
+# the Voice API), a baked voice MCP proxy (auto-wired by VOICE_API_URL/VOICE_API_KEY),
+# and MarkdownV2 reply rendering. It builds on the v2.2 worker transport, which
+# drops `claude --channels` (its CLI channel-host poller was unreliable) and
 # ships a Python Bot-API worker (scripts/tg-worker.py) as the container's main
 # process: it owns Telegram getUpdates polling and invokes headless `claude -p`
 # per message. No tmux, no telegram plugin, no cron — the worker also runs the
@@ -21,8 +24,20 @@ FROM debian:bookworm-slim
 #   only); tzdata = local timezone for the reminder scheduler; jq/git/gh/curl for
 #   the entrypoint + bot ops. No tmux/cron in v2.2.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git curl ca-certificates jq tini bash unzip gosu openssh-client python3 tzdata procps \
+      git curl ca-certificates jq tini bash unzip gosu openssh-client python3 python3-pip tzdata procps \
     && rm -rf /var/lib/apt/lists/*
+
+# --- Voice MCP proxy (baked) ---------------------------------------------------
+# So a voice-capable bot needs NO manual pip/copy: it gets the `voice` MCP tool by
+# just setting VOICE_API_URL + VOICE_API_KEY (the entrypoint auto-registers it).
+# Deps: the MCP SDK + httpx (the proxy itself only uses stdlib urllib, but mcp
+# pulls httpx). --break-system-packages: bookworm's python3 is PEP-668 externally-
+# managed. Size delta ≈ +65 MB (python3-pip ~45 MB + mcp/httpx/pydantic/etc ~22 MB).
+RUN pip3 install --no-cache-dir --break-system-packages "mcp>=1.2" "httpx>=0.27"
+# The vendored stdio proxy package (copied from trongnguyenbinh/voice-service).
+# Placed on a stable path added to PYTHONPATH at registration time.
+COPY vendor/voice_mcp_proxy/ /opt/voice-mcp-proxy/voice_mcp_proxy/
+RUN python3 -c "import sys; sys.path.insert(0,'/opt/voice-mcp-proxy'); import voice_mcp_proxy; print('voice_mcp_proxy', voice_mcp_proxy.__version__)"
 
 # --- gh CLI (GitHub: clone/pull/push, gh run list / GH Actions) via GitHub's apt repo ---
 RUN mkdir -p /etc/apt/keyrings \

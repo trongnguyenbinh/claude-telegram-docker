@@ -2,9 +2,9 @@
 # SCREENSHOTS (headless Chromium). Heavier (~+1GB) so the base image stays lean;
 # only bots that need a browser use this tag.
 #
-# v2.2: builds FROM the v2.2 WORKER base. CI passes the EXACT tagged base via
-# --build-arg BASE (e.g. :v2.2.0) so a tag build never depends on :latest.
-ARG BASE=ghcr.io/trongnguyenbinh/claude-telegram-docker:v2.2.0
+# v2.3: builds FROM the WORKER base. CI passes the EXACT tagged base via
+# --build-arg BASE (e.g. :v2.3.0) so a tag build never depends on :latest.
+ARG BASE=ghcr.io/trongnguyenbinh/claude-telegram-docker:v2.3.0
 FROM ${BASE}
 
 USER root

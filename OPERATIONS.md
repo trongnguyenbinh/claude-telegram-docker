@@ -89,6 +89,16 @@ accidentally jump it onto v2.2.
 - **Specialized bots (`BOT_ROLE`)** — seeds the role's CLAUDE.md into `$WORK_DIR/CLAUDE.md` +
   jq-merges `settings-fragment.json` + seeds `rules/` on first run. CLAUDE.md is only seeded
   when the work dir has none. Unset/`default`/unknown = default behavior. See `roles/README.md`.
+- **Media (v2.3)** — inbound photos/documents are saved to `~/.claude/workspace/inbox/` and Claude
+  views/reads them with the built-in `Read` tool (no extra config). **Voice/audio** needs
+  `VOICE_API_URL` + `VOICE_API_KEY`; without them a voice message gets a "voice not enabled" reply.
+  With voice set, the entrypoint auto-registers the baked `voice` MCP (`docker logs` shows
+  `registered voice MCP`); inbound transcription + `[[voice]]` replies work even without `mcp__voice`
+  in `TG_WORKER_ALLOWED_TOOLS` (the worker calls the Voice API itself). A voice reply that comes back
+  as text means `/speak` failed (worker fell back) — check `worker.log` + the Voice API health.
+- **Replies render as MarkdownV2 (v2.3)** — ` ```code``` ` blocks become tap-to-copy; if a reply
+  arrives as plain text with literal markdown, the MarkdownV2 parse 400'd and the worker fell back
+  (safe). `worker.log` logs `md2 send err (fallback plain)` in that case.
 - **Non-ASCII text** — image sets `LANG=C.UTF-8`. Old bots: recreate from the new image.
 - **GitHub inside the bot** — use `gh` (baked), auth via `-e GH_TOKEN=<PAT>` + `gh auth setup-git`.
 - **`docker exec` on a botuser bot** must use `-u botuser` (files under `~/.claude` are botuser's).
