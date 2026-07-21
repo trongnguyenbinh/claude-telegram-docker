@@ -22,7 +22,7 @@ CLAUDE_STAGE="${CLAUDE_STAGE:-$BOT_HOME/claude-stage}"
 export CLAUDE_CONFIG_DIR TELEGRAM_STATE_DIR WORK_DIR
 
 mkdir -p "$CLAUDE_CONFIG_DIR" "$TELEGRAM_STATE_DIR" "$TELEGRAM_STATE_DIR/sessions" \
-         "$WORK_DIR" "$WORK_DIR/reminders"
+         "$TELEGRAM_STATE_DIR/history" "$WORK_DIR" "$WORK_DIR/reminders"
 
 # 1) Seed baked Claude config (settings.json + plugins/ tree) into the volume on
 #    first boot only (fresh volume = no plugins dir yet). cp -a preserves ownership.

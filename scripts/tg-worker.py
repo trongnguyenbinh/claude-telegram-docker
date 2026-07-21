@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tg-worker — Telegram Bot-API worker for claude-telegram-docker v2.3.
+"""tg-worker — Telegram Bot-API worker for claude-telegram-docker v2.4.
 
 The container's MAIN process. Owns Telegram polling itself (getUpdates long-poll)
 and invokes headless `claude -p` once per message. Replaces the old
@@ -10,6 +10,13 @@ v2.3 adds media handling: inbound photos (Claude views them via the Read tool),
 documents (Read), and voice/audio (transcribed via the Voice API when configured);
 plus an optional voice REPLY path (a `[[voice]]`-prefixed reply is spoken and sent
 as a Telegram voice bubble). Voice needs VOICE_API_URL + VOICE_API_KEY set.
+
+v2.4 adds a per-group "continuous listen" mode. A group entry in access.json with
+`"continuousListen": true` makes the bot read EVERY message (no @mention needed):
+each non-noise message runs one `claude -p` that either replies or outputs the
+`[[skip]]` sentinel to stay silent. A rolling per-chat history buffer (not
+`--resume`) is the group memory; the owner (allowFrom[0]) can be DM'd privately
+via `[[dm]]...[[/dm]]` blocks. Default (mention-gated) groups + DMs are unchanged.
 
 Two threads:
   1. poll loop  — getUpdates → access gate → 👀 ack → `claude -p` → sendMessage.
@@ -62,6 +69,36 @@ REACT_RE = re.compile(r"\s*\[\[react:\s*(.+?)\s*\]\]\s*")
 VOICE_RE = re.compile(r"^\s*\[\[voice\]\]\s*\n?", re.IGNORECASE)
 CHUNK = 3800  # Telegram sendMessage text limit is 4096; leave headroom.
 
+# --- continuous-listen (v2.4) ---
+# Rolling history depth kept per continuous-listen chat (the group "memory").
+HIST_MAX = 40
+# `[[skip]]` sentinel: a continuous-listen reply that STARTS with it means "stay
+# silent" — the worker sends nothing.
+SKIP_RE = re.compile(r"^\s*\[\[\s*skip\s*\]\]", re.IGNORECASE)
+# `[[dm]]...[[/dm]]` blocks in a continuous reply are routed to the owner's DM.
+DM_RE = re.compile(r"\[\[dm\]\](.*?)\[\[/dm\]\]", re.DOTALL | re.IGNORECASE)
+
+# Extra system prompt appended (after REACT_HINT) only for continuous-listen groups.
+# Tells Claude to judge whether to speak, and how to route owner-only info.
+GROUP_HINT = (
+    "You are in a Telegram group and listening CONTINUOUSLY. Each turn you get the recent "
+    "conversation plus one [TIN MỚI] (newest message). Decide whether to speak. "
+    "If the newest message is NOT directed at you AND you have nothing genuinely useful or "
+    "relevant to add, output EXACTLY `[[skip]]` and nothing else — the system will stay silent. "
+    "Only reply when you're addressed/asked, or when someone clearly needs help you can give. "
+    "Never narrate your decision, never explain why you're skipping. When you do reply, be "
+    "concise and natural. Owner-only/sensitive info: wrap ONLY that part in [[dm]]...[[/dm]] "
+    "and it is delivered privately to the owner's DM; the rest of your reply goes to the group. "
+    "Use sparingly."
+)
+
+# Short acknowledgements that never warrant a `claude -p` call (buffered only).
+NOISE_WORDS = {
+    "ok", "oke", "okie", "okey", "okeee", "uh", "ừ", "u", "vâng", "dạ", "da",
+    "haha", "hihi", "hehe", "kk", "kkk", "xong", "rồi", "roi", "yep", "yup",
+    "ừm", "um", "uki",
+}
+
 # Effective-prompt notes appended when the user sends an attachment. Vietnamese
 # (the owner's language); tell Claude which built-in tool renders the file.
 PROMPT_PHOTO = ("[Người dùng gửi một hình ảnh, đã lưu tại {path}. "
@@ -100,6 +137,10 @@ def is_allowed(msg, access, bot_username):
     Group/supergroup: the group must be listed; if it has an allowFrom the sender
     must be in it; if requireMention is set the bot must be @mentioned. Bot
     senders are always skipped.
+
+    Continuous-listen (v2.4): a group with `continuousListen: true` ALLOWS every
+    message regardless of requireMention (allowFrom is still honored). The
+    addressing decision is deferred to the `[[skip]]` judge in handle_message.
     """
     chat = msg.get("chat", {}) or {}
     frm = msg.get("from", {}) or {}
@@ -115,11 +156,69 @@ def is_allowed(msg, access, bot_username):
     gaf = g.get("allowFrom") or []
     if gaf and fid not in gaf:
         return False
+    if g.get("continuousListen"):
+        return True  # listen to all; requireMention is bypassed for continuous groups
     if g.get("requireMention"):
         text = (msg.get("text") or "") + " " + (msg.get("caption") or "")
         if not (bot_username and ("@" + bot_username).lower() in text.lower()):
             return False
     return True
+
+
+def group_is_continuous(msg, access):
+    """True when this message's group has `continuousListen: true` in access.json."""
+    chat = msg.get("chat", {}) or {}
+    if chat.get("type") not in ("group", "supergroup"):
+        return False
+    g = (access.get("groups") or {}).get(str(chat.get("id")))
+    return bool(g and g.get("continuousListen"))
+
+
+def owner_id(access):
+    """Owner DM chat_id = first entry of access.allowFrom (or None). Used to route
+    `[[dm]]...[[/dm]]` blocks privately from a continuous-listen group."""
+    af = access.get("allowFrom") or []
+    return af[0] if af else None
+
+
+def is_noise(text):
+    """A continuous-listen message that isn't worth a `claude -p` call: emoji/punct
+    only, ≤2 chars, or a bare acknowledgement ("ok", "uki", ...). Pure — no I/O."""
+    t = (text or "").strip()
+    if len(t) <= 2:
+        return True
+    if t.lower() in NOISE_WORDS:
+        return True
+    if not re.search(r"[0-9A-Za-zÀ-ỹ]", t):  # emoji / punctuation only
+        return True
+    return False
+
+
+def build_group_prompt(prior, sender, text, msg, bot_id):
+    """Build the `claude -p` prompt for a continuous-listen turn (pure — no I/O).
+
+    `prior` is the rolling history (oldest→newest) already read from disk; the
+    just-appended newest line is dropped so it isn't duplicated. Adds a reply-quote
+    hint when the sender is replying to another user's (non-bot) message.
+    """
+    body = (text or "").replace("\n", " ").strip()
+    if prior and prior[-1] == "@%s: %s" % (sender, body):
+        prior = prior[:-1]
+    prior = prior[-HIST_MAX:]
+    lines = ["Bạn đang lắng nghe liên tục trong 1 group Telegram."]
+    if prior:
+        lines.append("Hội thoại gần đây (cũ→mới):")
+        lines += prior
+    rt = msg.get("reply_to_message") or {}
+    rq = rt.get("text") or rt.get("caption")
+    if rq and str((rt.get("from") or {}).get("id")) != str(bot_id):
+        ruser = ((rt.get("from") or {}).get("username")
+                 or (rt.get("from") or {}).get("first_name") or "user")
+        lines.append('(@%s đang reply tin của @%s: "%s")' % (sender, ruser, rq[:300]))
+    lines += ["", "[TIN MỚI] @%s: %s" % (sender, text), "",
+              "Quyết định theo hướng dẫn ở system prompt: trả lời NGẮN GỌN, "
+              "hoặc xuất đúng [[skip]] nếu không nên nói gì."]
+    return "\n".join(lines)
 
 
 def parse_react(reply):
@@ -356,13 +455,21 @@ def compute_next_fire(rem, after_dt):
     return None
 
 
-def build_claude_cmd(prompt, model, permission_mode, allowed_tools, resume_sid):
-    """Assemble the `claude -p` argv (pure — no env, no exec)."""
+def build_claude_cmd(prompt, model, permission_mode, allowed_tools, resume_sid,
+                     extra_system=""):
+    """Assemble the `claude -p` argv (pure — no env, no exec).
+
+    `extra_system` (e.g. GROUP_HINT for continuous-listen groups) is appended after
+    REACT_HINT in the single --append-system-prompt value.
+    """
+    system = REACT_HINT
+    if extra_system:
+        system = REACT_HINT + "\n\n" + extra_system
     cmd = [
         "claude", "-p", prompt,
         "--output-format", "json",
         "--permission-mode", permission_mode,
-        "--append-system-prompt", REACT_HINT,
+        "--append-system-prompt", system,
         "--allowedTools", allowed_tools,
     ]
     if model:
@@ -396,6 +503,8 @@ class Config:
         self.outbox_dir = os.path.join(self.work_dir, "outbox")
         self.reminders_dir = os.path.join(self.work_dir, "reminders")
         self.sess_dir = os.path.join(self.state_dir, "sessions")
+        # Rolling per-chat history buffers for continuous-listen groups (v2.4).
+        self.hist_dir = os.path.join(self.state_dir, "history")
         self.offset_file = os.path.join(self.state_dir, "offset")
         self.log_file = os.path.join(self.state_dir, "worker.log")
         self.heartbeat_file = os.path.join(self.state_dir, "worker.heartbeat")
@@ -419,7 +528,9 @@ class Worker:
         self.cfg = cfg
         self.api = "https://api.telegram.org/bot" + cfg.token
         self.bot_username = None
+        self.bot_id = None
         os.makedirs(cfg.sess_dir, exist_ok=True)
+        os.makedirs(cfg.hist_dir, exist_ok=True)
         os.makedirs(cfg.reminders_dir, exist_ok=True)
 
     # --- logging / heartbeat ---
@@ -602,6 +713,27 @@ class Worker:
             except OSError:
                 pass
 
+    # --- rolling group history (continuous-listen memory) ---
+    def _hist_path(self, chat_id):
+        return os.path.join(self.cfg.hist_dir, str(chat_id))
+
+    def hist_append(self, chat_id, line):
+        """Append one `@sender: text` line to the chat's rolling buffer (last HIST_MAX)."""
+        try:
+            p = self._hist_path(chat_id)
+            lines = open(p).read().splitlines() if os.path.exists(p) else []
+            lines.append((line or "").replace("\n", " ").strip())
+            lines = lines[-HIST_MAX:]
+            open(p, "w").write("\n".join(lines) + "\n")
+        except OSError as e:
+            self.log("hist err", e)
+
+    def hist_read(self, chat_id):
+        try:
+            return open(self._hist_path(chat_id)).read().splitlines()
+        except OSError:
+            return []
+
     # --- claude invocation ---
     def _claude_env(self):
         env = dict(os.environ)
@@ -613,10 +745,13 @@ class Worker:
                        + env.get("PATH", "/usr/local/bin:/usr/bin:/bin"))
         return env
 
-    def run_claude(self, prompt, resume_sid=None, timeout=600):
-        """Run one headless `claude -p` turn. Returns (reply_text, session_id)."""
+    def run_claude(self, prompt, resume_sid=None, timeout=600, extra_system=""):
+        """Run one headless `claude -p` turn. Returns (reply_text, session_id).
+
+        `extra_system` appends to the system prompt (GROUP_HINT for continuous groups).
+        """
         cmd = build_claude_cmd(prompt, self.cfg.model, self.cfg.permission_mode,
-                               self.cfg.allowed_tools, resume_sid)
+                               self.cfg.allowed_tools, resume_sid, extra_system=extra_system)
         try:
             p = subprocess.run(cmd, capture_output=True, text=True,
                                env=self._claude_env(), cwd=self.cfg.work_dir, timeout=timeout)
@@ -671,9 +806,17 @@ class Worker:
         # there's genuinely nothing to act on.
         if cid is None or (not text and att is None):
             return
-        if not is_allowed(msg, self.load_access(), self.bot_username):
+        access = self.load_access()
+        if not is_allowed(msg, access, self.bot_username):
             return
         is_group = chat.get("type") in ("group", "supergroup")
+        # v2.4: continuous-listen groups take a separate path — buffer every message
+        # and let the [[skip]] judge decide whether to speak (no --resume; the rolling
+        # history buffer is the memory). Default/mention-gated groups + DMs fall
+        # through to the unchanged single-turn path below.
+        if is_group and group_is_continuous(msg, access):
+            self.handle_continuous(msg, cid, text, access)
+            return
         reply_to = msg["message_id"] if is_group else None
         self.react(cid, msg["message_id"])  # instant 👀 ack while Claude thinks
 
@@ -699,6 +842,54 @@ class Worker:
         if want_voice and self.cfg.voice_enabled and self.send_voice_reply(cid, reply, reply_to):
             return  # sent as a voice bubble
         self.send(cid, reply, reply_to=reply_to)
+
+    def handle_continuous(self, msg, cid, text, access):
+        """Continuous-listen group turn (v2.4).
+
+        Every message is appended to the rolling history buffer (the group memory).
+        Pure-noise messages (emoji-only / short acks) are buffered but never spend a
+        `claude -p` call. Otherwise ONE turn runs with GROUP_HINT and NO --resume; a
+        reply starting with `[[skip]]` stays silent, `[[dm]]...[[/dm]]` blocks are
+        routed to the owner's DM, and the rest is sent to the group (then echoed back
+        into the buffer). Media handling / voice replies are intentionally NOT used
+        here — those stay on the DM / mention-gated path.
+        """
+        frm = msg.get("from", {}) or {}
+        sender = frm.get("username") or frm.get("first_name") or "user"
+        mid = msg["message_id"]
+        body = (text or "").strip()
+        if not body:
+            # non-text message (photo/doc/voice) — note it in memory, don't spend a call
+            self.hist_append(cid, "@%s: [media]" % sender)
+            return
+        self.hist_append(cid, "@%s: %s" % (sender, body))  # buffer EVERY message
+        if is_noise(body):
+            return  # keep listening, save the call
+        self.react(cid, mid)  # 👀 while judging
+        t0 = time.time()
+        prompt = build_group_prompt(self.hist_read(cid), sender, body, msg, self.bot_id)
+        reply, _sid = self.run_claude(prompt, resume_sid=None, extra_system=GROUP_HINT)
+        if SKIP_RE.match(reply or ""):
+            self.react(cid, mid)  # leave a subtle 👀, send nothing
+            self.log("skip %.1fs chat=%s @%s" % (time.time() - t0, cid, sender))
+            return
+        emoji, reply = parse_react(reply)
+        if emoji:
+            self.react(cid, mid, emoji)
+        # owner-only parts: [[dm]]...[[/dm]] -> owner DM, the rest -> the group
+        oid = owner_id(access)
+        dm_parts = DM_RE.findall(reply)
+        if dm_parts and oid:
+            for d in dm_parts:
+                d = d.strip()
+                if d:
+                    self.send(int(oid), d)
+            reply = DM_RE.sub("", reply).strip()
+        if reply:
+            self.send(cid, reply, reply_to=mid)
+            self.hist_append(cid, "@bot: %s" % reply.replace("\n", " ")[:300])
+        self.log("group %.1fs chat=%s @%s react=%s dm=%d" % (
+            time.time() - t0, cid, sender, emoji or "-", len(dm_parts)))
 
     # --- reminders ---
     def _iter_reminders(self):
@@ -819,6 +1010,7 @@ class Worker:
         try:
             me = self.tg("getMe", {}, timeout=15)
             self.bot_username = (me.get("result") or {}).get("username")
+            self.bot_id = (me.get("result") or {}).get("id")
         except Exception as e:
             self.log("getMe err", e)
         self.log("worker online — bot @%s model=%s perm=%s tools=[%s] config=%s" % (

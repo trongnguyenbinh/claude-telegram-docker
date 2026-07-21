@@ -1,5 +1,32 @@
 # Changelog
 
+## v2.4.0 — per-group continuous-listen mode
+
+Ships as `:v2.4.0` / `:v2.4.0-playwright`; does **not** move `:latest` (same gating
+as v2.2/v2.3 — a `v*` tag push publishes the version tag only). Builds on the v2.3 worker.
+Purely additive: DMs and default (mention-gated) groups behave exactly as before.
+
+- **New — continuous-listen groups**: a group entry in `access.json` with
+  `"continuousListen": true` makes the bot read **every** message in that group (no
+  `@mention` required). `allowFrom` is still honored; `requireMention` is bypassed for
+  such groups. All other groups keep the exact v2.3 mention-gating behavior.
+- **How it works** (`handle_continuous` in `tg-worker.py`):
+  - Every incoming text message is appended to a **rolling per-chat history buffer**
+    (last `HIST_MAX` = 40 lines as `@sender: text`), stored under
+    `$TELEGRAM_STATE_DIR/history/<chat_id>` (persisted on the volume, next to `sessions/`).
+  - **Noise** (emoji-only, ≤2 chars, or bare acks like `ok` / `uki`) is buffered but
+    never triggers a `claude -p` call — saves cost.
+  - Otherwise **one** `claude -p` runs with **no `--resume`** (the buffer is the memory)
+    and an appended `GROUP_HINT` system prompt. Claude either replies concisely or outputs
+    exactly `[[skip]]` to stay silent when the message isn't directed at it.
+  - A `[[skip]]` reply → the worker sends nothing (leaves a subtle 👀) and logs a skip.
+  - **Owner DM routing**: `[[dm]]...[[/dm]]` blocks in a reply are sent privately to the
+    owner's DM (owner = `access.json` `allowFrom[0]`); the rest goes to the group.
+  - Replies still use the existing MarkdownV2 / plain-text send path; `[[react:X]]` still works.
+- **No new env vars** — the feature is toggled entirely per-group in `access.json`.
+- **Media / voice replies** are intentionally left on the DM + mention-gated path; a
+  non-text message in a continuous group is noted in the buffer as `[media]` without a call.
+
 ## v2.3.0 — media handling (images, voice, documents) + baked voice MCP
 
 Ships as `:v2.3.0` / `:v2.3.0-playwright`; does **not** move `:latest` (same gating
